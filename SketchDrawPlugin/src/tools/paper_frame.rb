@@ -39,26 +39,33 @@ module SketchDraw
       dlg.set_file(ui_path('paper_dialog.html'))
 
       dlg.add_action_callback('insert_frame') do |_ctx, size_name, cw, ch|
-        if size_name == 'custom'
-          insert_frame(cw.to_f, ch.to_f)
-        else
-          w, h = SIZES[size_name]
-          insert_frame(w, h)
+        begin
+          if size_name == 'custom'
+            insert_frame(cw.to_f, ch.to_f)
+          else
+            w, h = SIZES[size_name]
+            insert_frame(w, h)
+          end
+        rescue => e
+          puts "SketchDraw PaperFrame insert error: #{e.message}"
+          puts e.backtrace.first(3).join("\n")
+        ensure
+          dlg.close
         end
-        dlg.close
       end
 
       dlg.add_action_callback('cancel') { dlg.close }
 
-      dlg.add_action_callback('get_current') do |action_ctx|
+      dlg.add_action_callback('get_current') do |_ctx|
         frame = find_frame
-        if frame
+        json = if frame
           w = frame.get_attribute(ATTR_NS, 'width')
           h = frame.get_attribute(ATTR_NS, 'height')
-          action_ctx.resolve({ width: w, height: h }.to_json)
+          { width: w, height: h }.to_json
         else
-          action_ctx.resolve('null')
+          'null'
         end
+        dlg.execute_script("receiveCurrent(#{json})")
       end
 
       dlg.show
@@ -81,7 +88,9 @@ module SketchDraw
       ]
       frame_grp = entities.add_group
       g_ent     = frame_grp.entities
-      edges     = g_ent.add_face(pts).edges
+      face      = g_ent.add_face(pts)
+      edges     = face.edges
+      face.erase!   # keep only the 4 border edges, no filled face
       edges.each { |e| e.layer = model.layers.at(0) }
 
       frame_grp.set_attribute(ATTR_NS, 'type',   FRAME_TAG)
@@ -178,12 +187,21 @@ module SketchDraw
     def self.update_title_field(field_key, value)
       model = Sketchup.active_model
       model.start_operation('Update Title Block', true)
-      model.active_entities.grep(Sketchup::Text).each do |txt|
-        if txt.get_attribute(ATTR_NS, 'title_field') == field_key
-          txt.string = value
+      begin
+        model.active_entities.each do |ent|
+          next unless ent.is_a?(Sketchup::Text)
+          next unless ent.get_attribute(ATTR_NS, 'title_field') == field_key
+          begin
+            ent.text = value
+          rescue
+            ent.string = value rescue nil
+          end
         end
+        model.commit_operation
+      rescue => e
+        model.abort_operation rescue nil
+        puts "SketchDraw update_title_field error: #{e.message}"
       end
-      model.commit_operation
     end
 
     # ── Helpers ───────────────────────────────────────────────────────

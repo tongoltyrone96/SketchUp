@@ -3,8 +3,14 @@ module SketchDraw
     ATTR_NS = SketchDraw::PLUGIN_ID
 
     def self.install_observer
-      obs = AppObserver.new
-      Sketchup.add_observer(obs)
+      # Register on the model that is already open when the plugin loads
+      if Sketchup.active_model
+        Sketchup.active_model.add_observer(ModelObserver.new)
+        puts 'SketchDraw: ModelObserver registered on current model'
+      end
+      # Register AppObserver so future models also get an observer
+      Sketchup.add_observer(AppObserver.new)
+      puts 'SketchDraw: AppObserver registered'
     end
 
     class AppObserver < Sketchup::AppObserver
@@ -19,6 +25,41 @@ module SketchDraw
       def register(model)
         obs = ModelObserver.new
         model.add_observer(obs)
+      end
+    end
+
+    class ModelObserver < Sketchup::ModelObserver
+      def initialize
+        @handling = false
+      end
+
+      def onActivePathChanged(model)
+        puts "SketchDraw: onActivePathChanged fired. active_path=#{model.active_path.inspect}"
+        return if @handling
+
+        path = model.active_path
+        return if path.nil? || path.empty?
+
+        entity = path.last
+        return unless entity.respond_to?(:get_attribute)
+
+        type = entity.get_attribute(SketchDraw::PLUGIN_ID, 'type')
+        puts "SketchDraw: double-clicked entity type=#{type.inspect}"
+        return unless %w[text arrow].include?(type)
+
+        @handling = true
+        UI.start_timer(0.0, false) do
+          begin
+            model.close_active
+            sel = model.selection
+            sel.clear
+            sel.add(entity)
+            puts "SketchDraw: opening edit dialog for #{type}"
+            EditTool.edit_selected
+          ensure
+            @handling = false
+          end
+        end
       end
     end
 

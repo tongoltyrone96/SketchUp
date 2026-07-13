@@ -54,9 +54,9 @@
     });
   });
 
-  sketchup.get_current().then(function(json) {
+  function receiveCurrent(json) {
     if (!json || json === 'null') return;
-    var d = JSON.parse(json);
+    var d = (typeof json === 'string') ? JSON.parse(json) : json;
     var w = d.width, h = d.height;
     var matched = false;
     var sizes = { A0:[1189,841], A1:[841,594], A2:[594,420], A3:[420,297], A4:[297,210] };
@@ -72,7 +72,8 @@
       document.getElementById('custom_w').value = w;
       document.getElementById('custom_h').value = h;
     }
-  });
+  }
+  sketchup.get_current();
 
   function insert() {
     var sel = document.querySelector('input[name=size]:checked');

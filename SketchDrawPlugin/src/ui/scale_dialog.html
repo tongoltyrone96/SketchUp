@@ -2,51 +2,106 @@
 <html>
 <head>
   <link rel="stylesheet" href="assets/style.css">
+  <style>
+    html, body { height: 100%; margin: 0; }
+    body {
+      display: flex;
+      flex-direction: column;
+      padding: 16px;
+      box-sizing: border-box;
+      height: 100%;
+    }
+    .content { flex: 1; overflow-y: auto; }
+    .footer {
+      flex-shrink: 0;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding-top: 12px;
+      border-top: 1px solid #444;
+      margin-top: 12px;
+    }
+  </style>
 </head>
 <body>
-  <h3 style="margin:0 0 16px; color:#ddd">Set Drawing Scale</h3>
+  <div class="content">
+    <h3 style="margin:0 0 16px; color:#ddd">Set Drawing Scale</h3>
 
-  <label>Scale Ratio</label>
-  <select id="ratio_select" onchange="onSelectChange()">
-    <option value="1">1:1</option>
-    <option value="2">1:2</option>
-    <option value="5">1:5</option>
-    <option value="10">1:10</option>
-    <option value="20">1:20</option>
-    <option value="25">1:25</option>
-    <option value="50">1:50</option>
-    <option value="100">1:100</option>
-    <option value="200">1:200</option>
-    <option value="500">1:500</option>
-    <option value="1000">1:1000</option>
-  </select>
+    <label>Scale Ratio</label>
+    <select id="ratio_select" onchange="onSelectChange()">
+      <option value="1">1:1</option>
+      <option value="2">1:2</option>
+      <option value="5">1:5</option>
+      <option value="10">1:10</option>
+      <option value="20">1:20</option>
+      <option value="25">1:25</option>
+      <option value="50">1:50</option>
+      <option value="100">1:100</option>
+      <option value="200">1:200</option>
+      <option value="500">1:500</option>
+      <option value="1000">1:1000</option>
+      <option value="custom">Custom...</option>
+    </select>
 
-  <p style="color:#888; font-size:11px; margin-top:8px">
-    Real-world dimensions will be displayed after scaling.
-  </p>
+    <div id="custom_div" style="display:none; margin-top:12px">
+      <label>Custom Scale  (1 : N)</label>
+      <div style="display:flex; align-items:center; gap:8px; margin-top:4px">
+        <span style="color:#ddd; font-size:13px">1 :</span>
+        <input type="number" id="custom_n" min="1" max="99999" value="200"
+               style="width:100px; padding:6px 8px; background:#3a3a3a; color:#ddd;
+                      border:1px solid #555; border-radius:4px; font-size:13px">
+      </div>
+    </div>
 
-  <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:20px">
-    <button class="secondary" onclick="window.location.href='sketchup:cancel'">Cancel</button>
+    <p style="color:#888; font-size:11px; margin-top:12px">
+      Real-world dimensions will be displayed after scaling.
+    </p>
+  </div>
+
+  <div class="footer">
+    <button class="secondary" onclick="sketchup.cancel()">Cancel</button>
     <button onclick="apply()">Apply Scale</button>
   </div>
 
 <script>
-  sketchup.get_current_scale().then(function(val) {
-    var ratio = parseInt(val) || 1;
+  function receiveScale(ratio) {
+    ratio = parseInt(ratio) || 1;
     var sel = document.getElementById('ratio_select');
+    var matched = false;
     for (var i = 0; i < sel.options.length; i++) {
       if (parseInt(sel.options[i].value) === ratio) {
         sel.selectedIndex = i;
+        matched = true;
         break;
       }
     }
-  });
+    if (!matched && ratio > 1) {
+      sel.value = 'custom';
+      document.getElementById('custom_div').style.display = 'block';
+      document.getElementById('custom_n').value = ratio;
+    }
+  }
+  sketchup.get_current_scale();
 
-  function onSelectChange() {}
+  function onSelectChange() {
+    var val = document.getElementById('ratio_select').value;
+    document.getElementById('custom_div').style.display =
+      val === 'custom' ? 'block' : 'none';
+  }
 
   function apply() {
-    var ratio = document.getElementById('ratio_select').value;
-    sketchup.apply_scale(ratio);
+    var sel = document.getElementById('ratio_select');
+    var ratio;
+    if (sel.value === 'custom') {
+      ratio = parseInt(document.getElementById('custom_n').value);
+      if (!ratio || ratio < 1) {
+        alert('Please enter a valid number for the scale.');
+        return;
+      }
+    } else {
+      ratio = parseInt(sel.value);
+    }
+    sketchup.apply_scale(ratio.toString());
   }
 </script>
 </body>

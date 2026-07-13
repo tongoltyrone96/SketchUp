@@ -33,7 +33,6 @@ module SketchDraw
       pt = Geom::Point3d.new(@ip.position.x, @ip.position.y, 0)
       @pts << pt
 
-      # Capture the scale of the entity under the cursor at this click point
       @snap_scales << pick_entity_scale(view, x, y) if @pts.length <= 2
 
       case @pts.length
@@ -47,6 +46,12 @@ module SketchDraw
         @snap_scales = []
         Sketchup.set_status_text('Click first point of dimension')
       end
+      view.invalidate
+    rescue => e
+      @pts         = []
+      @snap_scales = []
+      puts "SketchDraw DimensionTool click error: #{e.message}"
+      Sketchup.set_status_text('Click first point of dimension')
       view.invalidate
     end
 
@@ -82,20 +87,33 @@ module SketchDraw
       model    = Sketchup.active_model
       entities = model.active_entities
       model.start_operation('Place Dimension', true)
+      begin
+        ratio      = effective_scale
+        raw_dist   = pt1.distance(pt2)
+        real_dist  = raw_dist * ratio
+        label      = format_mm(real_dist)
 
-      ratio     = effective_scale
-      raw_dist  = pt1.distance(pt2)
-      real_dist = raw_dist * ratio
-      label     = format_mm(real_dist)
+        # Compute perpendicular offset so dimension line is always parallel to measured edge
+        dir  = (pt2 - pt1).normalize
+        perp = Geom::Vector3d.new(-dir.y, dir.x, 0).normalize
+        raw  = offset_pt - Geom::Point3d.new((pt1.x + pt2.x) / 2.0,
+                                              (pt1.y + pt2.y) / 2.0, 0)
+        dist = raw.dot(perp)
+        offset_vec = Geom::Vector3d.new(perp.x * dist, perp.y * dist, 0)
 
-      dim = entities.add_dimension_linear(pt1, pt2, offset_pt)
-      dim.text = label
+        dim = entities.add_dimension_linear(pt1, pt2, offset_vec)
+        dim.text = label
 
-      dim.set_attribute(ATTR_NS, 'type',     'dimension')
-      dim.set_attribute(ATTR_NS, 'scale',    ratio)
-      dim.set_attribute(ATTR_NS, 'raw_dist', raw_dist)
+        dim.set_attribute(ATTR_NS, 'type',     'dimension')
+        dim.set_attribute(ATTR_NS, 'scale',    ratio)
+        dim.set_attribute(ATTR_NS, 'raw_dist', raw_dist)
 
-      model.commit_operation
+        model.commit_operation
+      rescue => e
+        model.abort_operation rescue nil
+        puts "SketchDraw DimensionTool error: #{e.message}"
+        puts e.backtrace.first(3).join("\n")
+      end
     end
 
     # Returns the scale ratio to use for this dimension.
