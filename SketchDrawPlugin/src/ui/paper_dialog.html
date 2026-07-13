@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <h3 style="margin:0 0 16px; color:#ddd">Select Paper Size</h3>
+
+  <label>Standard Size</label>
+  <div style="display:flex; flex-direction:column; gap:6px; margin-bottom:12px">
+    <label style="display:flex; align-items:center; gap:8px; margin:0; color:#ddd; font-size:12px">
+      <input type="radio" name="size" value="A0"> A0 — 1189 × 841 mm (Landscape)
+    </label>
+    <label style="display:flex; align-items:center; gap:8px; margin:0; color:#ddd; font-size:12px">
+      <input type="radio" name="size" value="A1"> A1 — 841 × 594 mm (Landscape)
+    </label>
+    <label style="display:flex; align-items:center; gap:8px; margin:0; color:#ddd; font-size:12px">
+      <input type="radio" name="size" value="A2"> A2 — 594 × 420 mm (Landscape)
+    </label>
+    <label style="display:flex; align-items:center; gap:8px; margin:0; color:#ddd; font-size:12px">
+      <input type="radio" name="size" value="A3" checked> A3 — 420 × 297 mm (Landscape)
+    </label>
+    <label style="display:flex; align-items:center; gap:8px; margin:0; color:#ddd; font-size:12px">
+      <input type="radio" name="size" value="A4"> A4 — 297 × 210 mm (Portrait)
+    </label>
+    <label style="display:flex; align-items:center; gap:8px; margin:0; color:#ddd; font-size:12px">
+      <input type="radio" name="size" value="custom" id="radio_custom"> Custom
+    </label>
+  </div>
+
+  <div id="custom_fields" style="display:none; margin-bottom:12px">
+    <div style="display:flex; gap:12px">
+      <div style="flex:1">
+        <label>Width (mm)</label>
+        <input type="number" id="custom_w" value="420" min="1" max="10000">
+      </div>
+      <div style="flex:1">
+        <label>Height (mm)</label>
+        <input type="number" id="custom_h" value="297" min="1" max="10000">
+      </div>
+    </div>
+  </div>
+
+  <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:16px">
+    <button class="secondary" onclick="sketchup.cancel()">Cancel</button>
+    <button onclick="insert()">Insert Frame</button>
+  </div>
+
+<script>
+  document.querySelectorAll('input[name=size]').forEach(function(r) {
+    r.addEventListener('change', function() {
+      document.getElementById('custom_fields').style.display =
+        this.value === 'custom' ? 'block' : 'none';
+    });
+  });
+
+  sketchup.get_current().then(function(json) {
+    if (!json || json === 'null') return;
+    var d = JSON.parse(json);
+    var w = d.width, h = d.height;
+    var matched = false;
+    var sizes = { A0:[1189,841], A1:[841,594], A2:[594,420], A3:[420,297], A4:[297,210] };
+    Object.keys(sizes).forEach(function(k) {
+      if (sizes[k][0] == w && sizes[k][1] == h) {
+        var r = document.querySelector('input[value="' + k + '"]');
+        if (r) { r.checked = true; matched = true; }
+      }
+    });
+    if (!matched) {
+      document.getElementById('radio_custom').checked = true;
+      document.getElementById('custom_fields').style.display = 'block';
+      document.getElementById('custom_w').value = w;
+      document.getElementById('custom_h').value = h;
+    }
+  });
+
+  function insert() {
+    var sel = document.querySelector('input[name=size]:checked');
+    if (!sel) return;
+    var size = sel.value;
+    var cw = document.getElementById('custom_w').value;
+    var ch = document.getElementById('custom_h').value;
+    sketchup.insert_frame(size, cw, ch);
+  }
+</script>
+</body>
+</html>

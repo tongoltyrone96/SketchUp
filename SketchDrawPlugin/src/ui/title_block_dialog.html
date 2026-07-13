@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <h3 style="margin:0 0 16px; color:#ddd">Edit Title Block</h3>
+
+  <label>Project Name</label>
+  <input id="project_name" type="text">
+
+  <label>Drawing Title</label>
+  <input id="drawing_title" type="text">
+
+  <label>Date</label>
+  <input id="date" type="text">
+
+  <label>Drawn By</label>
+  <input id="drawn_by" type="text">
+
+  <label>Revision</label>
+  <input id="revision" type="text">
+
+  <p style="color:#aaa; font-size:11px; margin-top:12px">Scale: auto-updated from Scale Tool</p>
+
+  <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:16px">
+    <button class="secondary" onclick="window.location.href='sketchup:cancel'">Cancel</button>
+    <button onclick="save()">Save</button>
+  </div>
+
+<script>
+  sketchup.get_fields().then(function(json) {
+    var fields = JSON.parse(json) || {};
+    Object.keys(fields).forEach(function(k) {
+      var el = document.getElementById(k);
+      if (el) el.value = fields[k] || '';
+    });
+  });
+
+  function save() {
+    var data = {
+      project_name:  document.getElementById('project_name').value,
+      drawing_title: document.getElementById('drawing_title').value,
+      date:          document.getElementById('date').value,
+      drawn_by:      document.getElementById('drawn_by').value,
+      revision:      document.getElementById('revision').value
+    };
+    sketchup.save_fields(JSON.stringify(data));
+  }
+</script>
+</body>
+</html>

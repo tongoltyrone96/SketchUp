@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px">
+    <span style="color:#aaa; font-size:11px">Font:</span>
+    <select id="font" style="flex:1" onchange="updatePreview()">
+      <option>Arial</option>
+      <option>Times New Roman</option>
+      <option>Calibri</option>
+      <option>Verdana</option>
+    </select>
+    <span style="color:#aaa; font-size:11px">Size (pt):</span>
+    <input id="size_pt" type="number" value="10" min="7" max="72"
+           style="width:60px" oninput="updatePreview()">
+  </div>
+
+  <div style="display:flex; gap:4px; margin-bottom:8px">
+    <button class="fmt-btn" id="bold"      onclick="toggle('bold')">B</button>
+    <button class="fmt-btn" id="italic"    onclick="toggle('italic')">I</button>
+    <button class="fmt-btn" id="underline" onclick="toggle('underline')">U</button>
+    <button class="fmt-btn" id="caps"      onclick="toggle('caps')">AA</button>
+
+    <span style="margin:0 8px; border-left:1px solid #555"></span>
+
+    <input type="color" id="color" value="#000000" onchange="updatePreview()">
+
+    <span style="margin:0 8px; border-left:1px solid #555"></span>
+
+    <button class="fmt-btn" id="align_L" onclick="setAlign('L')">L</button>
+    <button class="fmt-btn" id="align_C" onclick="setAlign('C')">C</button>
+    <button class="fmt-btn" id="align_R" onclick="setAlign('R')">R</button>
+  </div>
+
+  <div style="display:flex; gap:12px; margin-bottom:8px">
+    <div style="flex:1">
+      <label>List:</label>
+      <select id="list_style" onchange="updatePreview()">
+        <option value="none">None</option>
+        <option value="dot">• Dot</option>
+        <option value="dash">- Dash</option>
+        <option value="number">1. Number</option>
+      </select>
+    </div>
+    <div style="flex:2">
+      <label>Tag (Layer):</label>
+      <select id="tag"></select>
+    </div>
+  </div>
+
+  <div id="preview">Welcome to text tool</div>
+
+  <textarea id="content" rows="6"
+            style="margin-top:8px; resize:vertical"
+            oninput="updatePreview()" onkeydown="handleKey(event)"></textarea>
+
+  <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:10px">
+    <button class="secondary" onclick="window.location.href='sketchup:cancel'">Cancel</button>
+    <button onclick="placeText()">Place Text</button>
+  </div>
+
+<script>
+var state = { bold:false, italic:false, underline:false, caps:false, align:'L' };
+
+sketchup.get_tags().then(function(json) {
+  var tags = JSON.parse(json) || [];
+  var sel  = document.getElementById('tag');
+  tags.forEach(function(t) {
+    var opt = document.createElement('option');
+    opt.value = opt.text = t;
+    sel.appendChild(opt);
+  });
+});
+
+sketchup.get_props().then(function(json) {
+  if (!json || json === 'null') return;
+  var p = JSON.parse(json);
+  if (p.font)       document.getElementById('font').value       = p.font;
+  if (p.size_pt)    document.getElementById('size_pt').value    = p.size_pt;
+  if (p.color)      document.getElementById('color').value      = p.color;
+  if (p.content)    document.getElementById('content').value    = p.content;
+  if (p.list_style) document.getElementById('list_style').value = p.list_style;
+  if (p.bold)      { state.bold      = true; document.getElementById('bold').classList.add('active'); }
+  if (p.italic)    { state.italic    = true; document.getElementById('italic').classList.add('active'); }
+  if (p.underline) { state.underline = true; document.getElementById('underline').classList.add('active'); }
+  if (p.is_caps)   { state.caps      = true; document.getElementById('caps').classList.add('active'); }
+  updatePreview();
+});
+
+function toggle(id) {
+  state[id] = !state[id];
+  document.getElementById(id).classList.toggle('active', state[id]);
+  updatePreview();
+}
+
+function setAlign(a) {
+  state.align = a;
+  ['L','C','R'].forEach(function(x) {
+    document.getElementById('align_'+x).classList.toggle('active', x===a);
+  });
+  updatePreview();
+}
+
+function handleKey(e) {
+  if (e.key !== 'Enter') return;
+  var style = document.getElementById('list_style').value;
+  if (style === 'none') return;
+  var ta   = document.getElementById('content');
+  var pos  = ta.selectionStart;
+  var text = ta.value;
+  var linesBefore = text.substring(0, pos).split('\n').length;
+  var prefix = style === 'dot'  ? '• '
+             : style === 'dash' ? '- '
+             : (linesBefore + 1) + '. ';
+  e.preventDefault();
+  var insert = '\n' + prefix;
+  ta.value = text.slice(0, pos) + insert + text.slice(pos);
+  ta.selectionStart = ta.selectionEnd = pos + insert.length;
+  updatePreview();
+}
+
+function updatePreview() {
+  var pv      = document.getElementById('preview');
+  var font    = document.getElementById('font').value;
+  var size    = document.getElementById('size_pt').value;
+  var color   = document.getElementById('color').value;
+  var content = document.getElementById('content').value;
+  var style   = document.getElementById('list_style').value;
+
+  var display = content.trim() || 'Welcome to text tool';
+  if (state.caps) display = display.toUpperCase();
+
+  if (!content.trim()) {
+    display = style === 'dot'    ? '• '  + display
+            : style === 'dash'   ? '- '  + display
+            : style === 'number' ? '1. ' + display
+            : display;
+  }
+
+  pv.style.fontFamily    = font;
+  pv.style.fontSize      = size + 'px';
+  pv.style.color         = color;
+  pv.style.fontWeight    = state.bold      ? 'bold'      : 'normal';
+  pv.style.fontStyle     = state.italic    ? 'italic'    : 'normal';
+  pv.style.textDecoration = state.underline ? 'underline' : 'none';
+  pv.style.textAlign     = state.align === 'C' ? 'center'
+                         : state.align === 'R' ? 'right' : 'left';
+  pv.innerHTML = display.replace(/\n/g, '<br>');
+}
+
+function placeText() {
+  var props = {
+    font:       document.getElementById('font').value,
+    size_pt:    parseFloat(document.getElementById('size_pt').value),
+    color:      document.getElementById('color').value,
+    bold:       state.bold,
+    italic:     state.italic,
+    underline:  state.underline,
+    is_caps:    state.caps,
+    align:      state.align,
+    list_style: document.getElementById('list_style').value,
+    tag:        document.getElementById('tag').value,
+    content:    document.getElementById('content').value
+  };
+  sketchup.place_text(JSON.stringify(props));
+}
+
+updatePreview();
+</script>
+</body>
+</html>

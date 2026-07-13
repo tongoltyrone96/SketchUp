@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <h3 style="margin:0 0 16px; color:#ddd">Set Drawing Scale</h3>
+
+  <label>Scale Ratio</label>
+  <select id="ratio_select" onchange="onSelectChange()">
+    <option value="1">1:1</option>
+    <option value="2">1:2</option>
+    <option value="5">1:5</option>
+    <option value="10">1:10</option>
+    <option value="20">1:20</option>
+    <option value="25">1:25</option>
+    <option value="50">1:50</option>
+    <option value="100">1:100</option>
+    <option value="200">1:200</option>
+    <option value="500">1:500</option>
+    <option value="1000">1:1000</option>
+  </select>
+
+  <p style="color:#888; font-size:11px; margin-top:8px">
+    Real-world dimensions will be displayed after scaling.
+  </p>
+
+  <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:20px">
+    <button class="secondary" onclick="window.location.href='sketchup:cancel'">Cancel</button>
+    <button onclick="apply()">Apply Scale</button>
+  </div>
+
+<script>
+  sketchup.get_current_scale().then(function(val) {
+    var ratio = parseInt(val) || 1;
+    var sel = document.getElementById('ratio_select');
+    for (var i = 0; i < sel.options.length; i++) {
+      if (parseInt(sel.options[i].value) === ratio) {
+        sel.selectedIndex = i;
+        break;
+      }
+    }
+  });
+
+  function onSelectChange() {}
+
+  function apply() {
+    var ratio = document.getElementById('ratio_select').value;
+    sketchup.apply_scale(ratio);
+  }
+</script>
+</body>
+</html>
