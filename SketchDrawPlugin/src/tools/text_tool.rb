@@ -108,10 +108,16 @@ module SketchDraw
         next if line_text.empty?
 
         y_pos    = origin.y - (i * line_spacing)
+        align_const = case (props[:align] || 'L').to_s.upcase
+                      when 'C' then TextAlignCenter
+                      when 'R' then TextAlignRight
+                      else TextAlignLeft
+                      end
+
         line_grp = g_entities.add_group
         line_grp.entities.add_3d_text(
           line_text,
-          TextAlignLeft,
+          align_const,
           font,
           bold,
           italic,

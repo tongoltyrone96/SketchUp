@@ -27,6 +27,9 @@ module SketchDraw
     end
     Toolbar.build
     EditTool.install_observer
+
+    menu = UI.menu('Extensions').add_submenu('SketchDraw')
+    menu.add_item('Show Toolbar') { Toolbar.show_toolbar }
   end
 
   boot

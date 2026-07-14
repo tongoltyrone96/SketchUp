@@ -2,59 +2,96 @@
 <html>
 <head>
   <link rel="stylesheet" href="assets/style.css">
+  <style>
+    html, body { height: 100%; margin: 0; }
+    body {
+      display: flex;
+      flex-direction: column;
+      padding: 12px;
+      box-sizing: border-box;
+      height: 100%;
+    }
+    .content { flex: 1; display: flex; flex-direction: column; gap: 6px; overflow: hidden; }
+    .footer {
+      flex-shrink: 0;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding-top: 12px;
+      border-top: 1px solid #444;
+      margin-top: 12px;
+    }
+    #preview {
+      display: block;
+      width: 100%;
+      height: 72px;
+      background: #1a1a1a;
+      border: 1px solid #555;
+      border-radius: 2px;
+    }
+  </style>
 </head>
 <body>
-  <h3 style="margin:0 0 12px; color:#ddd">Arrow Label</h3>
+  <div class="content">
+    <h3 style="margin:0 0 4px; color:#ddd">Arrow Label</h3>
 
-  <label>Label Text</label>
-  <input type="text" id="label" placeholder="Enter label text">
-
-  <div style="display:flex; gap:12px">
-    <div style="flex:1">
-      <label>Font</label>
-      <select id="font">
-        <option>Arial</option>
-        <option>Times New Roman</option>
-        <option>Calibri</option>
-        <option>Verdana</option>
-      </select>
+    <div>
+      <label>Label Text</label>
+      <input type="text" id="label" placeholder="Enter label text" oninput="drawPreview()">
     </div>
-    <div style="flex:1">
-      <label>Text Size (pt)</label>
-      <input type="number" id="text_size" value="10" min="6" max="72">
+
+    <div style="display:flex; gap:12px">
+      <div style="flex:1">
+        <label>Font</label>
+        <select id="font" onchange="drawPreview()">
+          <option>Arial</option>
+          <option>Times New Roman</option>
+          <option>Calibri</option>
+          <option>Verdana</option>
+        </select>
+      </div>
+      <div style="flex:1">
+        <label>Text Size (pt)</label>
+        <input type="number" id="text_size" value="10" min="6" max="72" oninput="drawPreview()">
+      </div>
+    </div>
+
+    <div style="display:flex; gap:12px; align-items:flex-end">
+      <div>
+        <label>Arrow Color</label>
+        <input type="color" id="arrow_color" value="#000000" oninput="drawPreview()">
+      </div>
+      <div>
+        <label>Text Color</label>
+        <input type="color" id="text_color" value="#000000" oninput="drawPreview()">
+      </div>
+      <div style="flex:1">
+        <label>Arrow Size (mm)</label>
+        <input type="number" id="arrow_size" value="5" min="1" max="20" step="0.5" oninput="drawPreview()">
+      </div>
+    </div>
+
+    <div>
+      <label style="display:flex; align-items:center; gap:6px; margin:0; color:#aaa; font-size:11px">
+        <input type="checkbox" id="text_bold" onchange="drawPreview()"> Bold text
+      </label>
+    </div>
+
+    <div>
+      <label>Preview</label>
+      <canvas id="preview" width="396" height="72"></canvas>
     </div>
   </div>
 
-  <div style="display:flex; gap:12px; align-items:flex-end; margin-top:4px">
-    <div style="flex:1">
-      <label>Arrow Color</label>
-      <input type="color" id="arrow_color" value="#ffffff">
-    </div>
-    <div style="flex:1">
-      <label>Text Color</label>
-      <input type="color" id="text_color" value="#ffffff">
-    </div>
-    <div style="flex:1">
-      <label>Arrow Size (mm)</label>
-      <input type="number" id="arrow_size" value="3" min="1" max="20" step="0.5">
-    </div>
-  </div>
-
-  <div style="margin-top:8px">
-    <label style="display:flex; align-items:center; gap:6px; margin:0; color:#aaa; font-size:11px">
-      <input type="checkbox" id="text_bold"> Bold text
-    </label>
-  </div>
-
-  <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:16px">
-    <button class="secondary" onclick="window.location.href='sketchup:cancel'">Cancel</button>
+  <div class="footer">
+    <button class="secondary" onclick="sketchup.cancel()">Cancel</button>
     <button onclick="place()">Place Arrow</button>
   </div>
 
 <script>
-  sketchup.get_props().then(function(json) {
-    if (!json || json === 'null') return;
-    var p = JSON.parse(json);
+  function receiveProps(json) {
+    if (!json || json === null) return;
+    var p = (typeof json === 'string') ? JSON.parse(json) : json;
     if (p.label)       document.getElementById('label').value       = p.label;
     if (p.font)        document.getElementById('font').value        = p.font;
     if (p.text_size)   document.getElementById('text_size').value   = p.text_size;
@@ -62,7 +99,66 @@
     if (p.text_color)  document.getElementById('text_color').value  = p.text_color;
     if (p.arrow_size)  document.getElementById('arrow_size').value  = p.arrow_size;
     if (p.text_bold)   document.getElementById('text_bold').checked = true;
-  });
+    drawPreview();
+  }
+
+  sketchup.get_props();
+
+  function drawPreview() {
+    var canvas = document.getElementById('preview');
+    var ctx    = canvas.getContext('2d');
+    var W = canvas.width, H = canvas.height;
+
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(0, 0, W, H);
+
+    var arrowColor  = document.getElementById('arrow_color').value;
+    var textColor   = document.getElementById('text_color').value;
+    var arrowSizeMM = parseFloat(document.getElementById('arrow_size').value) || 3;
+    var label       = document.getElementById('label').value || '';
+    var fontSize    = parseFloat(document.getElementById('text_size').value) || 10;
+    var bold        = document.getElementById('text_bold').checked;
+    var fontName    = document.getElementById('font').value;
+
+    // Arrowhead pixel size capped so it stays within the canvas
+    var arrowPx = Math.min(30, arrowSizeMM * 3);
+    // Line width scales linearly and independently from arrowhead scale
+    var lineW   = Math.max(1, arrowSizeMM * 0.35);
+
+    var realTipX = 16;
+    var baseX    = realTipX + arrowPx;
+    var tailX    = W - 16;
+    var midY     = H * 0.68;
+
+    // Leader line (base → tail) — same color as arrowhead
+    ctx.strokeStyle = arrowColor;
+    ctx.lineWidth   = lineW;
+    ctx.beginPath();
+    ctx.moveTo(baseX, midY);
+    ctx.lineTo(tailX, midY);
+    ctx.stroke();
+
+    // Arrowhead triangle (tip on left)
+    ctx.fillStyle = arrowColor;
+    ctx.beginPath();
+    ctx.moveTo(realTipX, midY);
+    ctx.lineTo(baseX, midY - arrowPx * 0.4);
+    ctx.lineTo(baseX, midY + arrowPx * 0.4);
+    ctx.closePath();
+    ctx.fill();
+
+    // Label centered above midpoint of line
+    if (label) {
+      var midX   = (realTipX + tailX) / 2;
+      var fontPx = Math.min(fontSize * 1.2, 15);
+      ctx.font          = (bold ? 'bold ' : '') + fontPx + 'px ' + fontName;
+      ctx.fillStyle     = textColor;
+      ctx.textAlign     = 'center';
+      ctx.textBaseline  = 'bottom';
+      ctx.fillText(label, midX, midY - lineW / 2 - 4);
+    }
+  }
 
   function place() {
     var data = {
@@ -76,6 +172,8 @@
     };
     sketchup.place_arrow(JSON.stringify(data));
   }
+
+  drawPreview();
 </script>
 </body>
 </html>

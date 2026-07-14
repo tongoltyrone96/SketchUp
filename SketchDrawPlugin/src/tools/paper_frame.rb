@@ -101,7 +101,7 @@ module SketchDraw
       # Programmatic inner border + title block (no .skp dependency)
       draw_title_block(entities, width, height)
 
-      fit_view(width, height)
+      fit_view(width, height, frame_grp)
       State.save_to_model(model)
       model.commit_operation
     end
@@ -150,7 +150,7 @@ module SketchDraw
       end
 
       # Scale initial value from current State
-      current_scale_label = State.scale_ratio == 1 ? '1:1' : "1:#{State.scale_ratio}"
+      current_scale_label = State.scale_ratio == 1 ? '' : "1:#{State.scale_ratio}"
 
       cell_pad = 1.5
 
@@ -179,8 +179,7 @@ module SketchDraw
     # ── Scale auto-update in title block ──────────────────────────────
     def self.update_scale_in_title_block
       ratio = State.scale_ratio
-      label = ratio == 1 ? '1:1' : "1:#{ratio}"
-      update_title_field('scale', label)
+      update_title_field('scale', '')
     end
 
     # ── Update a single title field value ─────────────────────────────
@@ -230,7 +229,7 @@ module SketchDraw
       entities.erase_entities(to_erase) unless to_erase.empty?
     end
 
-    def self.fit_view(width, height)
+    def self.fit_view(width, height, frame_entity = nil)
       view   = Sketchup.active_model.active_view
       camera = view.camera
       camera.perspective = false
@@ -241,10 +240,13 @@ module SketchDraw
         Geom::Point3d.new(cx, cy, 0),
         Geom::Vector3d.new(0, 1, 0)
       )
-      bb = Geom::BoundingBox.new
-      bb.add(Geom::Point3d.new(0,     0,      0))
-      bb.add(Geom::Point3d.new(width, height, 0))
-      view.zoom(bb)
+      # SketchUp 2026: view.zoom(Geom::BoundingBox) removed — pass entity directly.
+      if frame_entity && frame_entity.valid?
+        view.zoom(frame_entity)
+      else
+        existing = find_frame
+        existing ? view.zoom(existing) : view.zoom_extents
+      end
     end
 
     def self.ui_path(file)

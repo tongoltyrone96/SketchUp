@@ -9,9 +9,9 @@ module SketchDraw
       )
       dlg.set_file(ui_path('title_block_dialog.html'))
 
-      dlg.add_action_callback('get_fields') do |action_ctx|
+      dlg.add_action_callback('get_fields') do |_ctx|
         fields = load_current_fields
-        action_ctx.resolve(fields.to_json)
+        dlg.execute_script("receiveFields(#{fields.to_json})")
       end
 
       dlg.add_action_callback('save_fields') do |_ctx, json|
@@ -19,6 +19,8 @@ module SketchDraw
         apply_fields(data)
         dlg.close
       end
+
+      dlg.add_action_callback('cancel') { dlg.close }
 
       dlg.show
     end

@@ -24,18 +24,19 @@
   <p style="color:#aaa; font-size:11px; margin-top:12px">Scale: auto-updated from Scale Tool</p>
 
   <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:16px">
-    <button class="secondary" onclick="window.location.href='sketchup:cancel'">Cancel</button>
+    <button class="secondary" onclick="sketchup.cancel()">Cancel</button>
     <button onclick="save()">Save</button>
   </div>
 
 <script>
-  sketchup.get_fields().then(function(json) {
-    var fields = JSON.parse(json) || {};
+  function receiveFields(json) {
+    var fields = (typeof json === 'string') ? JSON.parse(json) : (json || {});
     Object.keys(fields).forEach(function(k) {
       var el = document.getElementById(k);
       if (el) el.value = fields[k] || '';
     });
-  });
+  }
+  sketchup.get_fields();
 
   function save() {
     var data = {
