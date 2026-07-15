@@ -11,12 +11,11 @@ module SketchDraw
     ATTR_NS   = SketchDraw::PLUGIN_ID
     FRAME_TAG = 'paper_frame'.freeze
 
-    # Inner-margin constants (drawing units = mm)
-    MARGIN_LEFT  = 25.0   # wider left side for binding
-    MARGIN_OTHER = 10.0   # top / right / bottom
-    TB_HEIGHT    = 25.0   # title block height
+    # Inner-margin constants (mm)
+    MARGIN_LEFT  = 25.0
+    MARGIN_OTHER = 10.0
+    TB_HEIGHT    = 25.0
 
-    # Title block column splits (cumulative fractions, left → right)
     TB_COL_SPLITS = [0.28, 0.55, 0.73, 0.83, 0.93].freeze
 
     TB_FIELDS = [
@@ -72,6 +71,7 @@ module SketchDraw
     end
 
     # ── Insert paper frame + title block ──────────────────────────────
+    # width / height are in mm; geometry is created in SketchUp inches (.mm)
     def self.insert_frame(width, height)
       model    = Sketchup.active_model
       entities = model.active_entities
@@ -79,18 +79,20 @@ module SketchDraw
 
       remove_existing_frame(entities)
 
-      # Outer border — thin-edge group (no filled face for cleaner PDF)
+      w = width.mm
+      h = height.mm
+
       pts = [
-        Geom::Point3d.new(0,     0,      0),
-        Geom::Point3d.new(width, 0,      0),
-        Geom::Point3d.new(width, height, 0),
-        Geom::Point3d.new(0,     height, 0)
+        Geom::Point3d.new(0, 0, 0),
+        Geom::Point3d.new(w, 0, 0),
+        Geom::Point3d.new(w, h, 0),
+        Geom::Point3d.new(0, h, 0)
       ]
       frame_grp = entities.add_group
       g_ent     = frame_grp.entities
       face      = g_ent.add_face(pts)
       edges     = face.edges
-      face.erase!   # keep only the 4 border edges, no filled face
+      face.erase!
       edges.each { |e| e.layer = model.layers.at(0) }
 
       frame_grp.set_attribute(ATTR_NS, 'type',   FRAME_TAG)
@@ -98,7 +100,6 @@ module SketchDraw
       frame_grp.set_attribute(ATTR_NS, 'height', height)
       frame_grp.name = "PaperFrame_#{width.to_i}x#{height.to_i}"
 
-      # Programmatic inner border + title block (no .skp dependency)
       draw_title_block(entities, width, height)
 
       fit_view(width, height, frame_grp)
@@ -108,26 +109,27 @@ module SketchDraw
 
     # ── Programmatic title block ───────────────────────────────────────
     def self.draw_title_block(entities, width, height)
-      lm = MARGIN_LEFT
-      rm = MARGIN_OTHER
-      tm = MARGIN_OTHER
-      bm = MARGIN_OTHER
-      tb_h = TB_HEIGHT
+      # All mm values converted to SketchUp inches with .mm
+      lm   = MARGIN_LEFT.mm
+      rm   = MARGIN_OTHER.mm
+      tm   = MARGIN_OTHER.mm
+      bm   = MARGIN_OTHER.mm
+      tb_h = TB_HEIGHT.mm
+      w    = width.mm
+      h    = height.mm
 
       left   = lm
-      right  = width  - rm
-      top    = height - tm
+      right  = w - rm
+      top    = h - tm
       bottom = bm
       tb_top = bottom + tb_h
-      tw     = right - left  # total title block width
+      tw     = right - left
 
-      # Structural lines group (inner border + title block grid)
       tb_grp = entities.add_group
       tb_grp.set_attribute(ATTR_NS, 'type', 'title_block')
       tb_grp.name = 'SketchDraw_TitleBlock'
       g = tb_grp.entities
 
-      # Inner border (4 edges)
       [
         [left,  bottom, right, bottom],
         [right, bottom, right, top   ],
@@ -137,36 +139,30 @@ module SketchDraw
         g.add_line(Geom::Point3d.new(x1, y1, 0), Geom::Point3d.new(x2, y2, 0))
       end
 
-      # Horizontal separator above title block
       g.add_line(
         Geom::Point3d.new(left,  tb_top, 0),
         Geom::Point3d.new(right, tb_top, 0)
       )
 
-      # Vertical column dividers
       TB_COL_SPLITS.each do |frac|
         x = left + tw * frac
         g.add_line(Geom::Point3d.new(x, bottom, 0), Geom::Point3d.new(x, tb_top, 0))
       end
 
-      # Scale initial value from current State
       current_scale_label = State.scale_ratio == 1 ? '' : "1:#{State.scale_ratio}"
-
-      cell_pad = 1.5
+      cell_pad = 1.5.mm
 
       TB_FIELDS.each do |fd|
         cell_x = left + tw * fd[:x0]
 
-        # Field label: 3D geometry text for reliable positioning (upper cell zone)
         lbl_grp = g.add_group
         lbl_grp.entities.add_3d_text(
-          fd[:label], TextAlignLeft, 'Arial', false, false, 3.5
+          fd[:label], TextAlignLeft, 'Arial', false, false, 3.5.mm
         )
         lbl_grp.transformation = Geom::Transformation.new(
           Geom::Point3d.new(cell_x + cell_pad, bottom + tb_h * 0.30, 0)
         )
 
-        # Editable value annotation (root level so update_title_field can find it)
         init_val = fd[:key] == 'scale' ? current_scale_label : ''
         val_txt  = entities.add_text(
           init_val,
@@ -178,7 +174,6 @@ module SketchDraw
 
     # ── Scale auto-update in title block ──────────────────────────────
     def self.update_scale_in_title_block
-      ratio = State.scale_ratio
       update_title_field('scale', '')
     end
 
@@ -233,14 +228,13 @@ module SketchDraw
       view   = Sketchup.active_model.active_view
       camera = view.camera
       camera.perspective = false
-      cx = width  / 2.0
-      cy = height / 2.0
+      cx = width.mm  / 2.0
+      cy = height.mm / 2.0
       camera.set(
-        Geom::Point3d.new(cx, cy, 1000),
+        Geom::Point3d.new(cx, cy, 1000.mm),
         Geom::Point3d.new(cx, cy, 0),
         Geom::Vector3d.new(0, 1, 0)
       )
-      # SketchUp 2026: view.zoom(Geom::BoundingBox) removed — pass entity directly.
       if frame_entity && frame_entity.valid?
         view.zoom(frame_entity)
       else

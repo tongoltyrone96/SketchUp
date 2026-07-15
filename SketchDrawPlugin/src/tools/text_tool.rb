@@ -88,8 +88,8 @@ module SketchDraw
       font    = props[:font]   || 'Arial'
       bold    = props[:bold]   == true || props[:bold]   == 'true'
       italic  = props[:italic] == true || props[:italic] == 'true'
-      height  = props[:size_pt].to_f * 0.3528  # pt → mm, direct SU units (no .mm)
-      height  = 3.5 if height <= 0
+      height  = (props[:size_pt].to_f * 0.3528).mm  # pt → mm → SketchUp inches
+      height  = 3.5.mm if height <= 0
 
       hex     = (props[:color] || '#000000').gsub('#', '')
       r, g, b = hex.scan(/../).map { |h| h.to_i(16) }

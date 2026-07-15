@@ -131,7 +131,7 @@ module SketchDraw
       arrow_mat  = model.materials["SKD_#{hex_a}"] || model.materials.add("SKD_#{hex_a}")
       arrow_mat.color = Sketchup::Color.new(ra, ga, ba)
 
-      arrow_size = (data[:arrow_size] || 3.0).to_f   # direct SU units = mm
+      arrow_size = (data[:arrow_size] || 3.0).to_f.mm
       line_width = arrow_size * 0.15                  # thickness proportional to arrow size
 
       dir = tip.vector_to(line_end)
@@ -172,14 +172,14 @@ module SketchDraw
       unless label.empty?
         font      = data[:font] || 'Arial'
         text_size = (data[:text_size] || 10.0).to_f
-        text_h    = text_size * 0.3528
+        text_h    = (text_size * 0.3528).mm
         mid       = Geom::Point3d.new(
           (tip.x + line_end.x) / 2.0,
           (tip.y + line_end.y) / 2.0,
           0
         )
         label_perp   = (perp.y < -0.001) ? perp.reverse : perp
-        label_origin = mid.offset(label_perp, text_h * 0.6 + line_width + 1.0)
+        label_origin = mid.offset(label_perp, text_h * 0.6 + line_width + 1.0.mm)
         TextTool.build_text_group(g_entities, label_origin, {
           content:    label,
           font:       font,

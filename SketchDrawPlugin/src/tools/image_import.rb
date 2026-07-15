@@ -38,12 +38,12 @@ module SketchDraw
         mat_name = "SKD_img_#{base}"
         mat      = model.materials[mat_name] || model.materials.add(mat_name)
         mat.texture      = path
-        mat.texture.size = [width_mm, height_mm]
+        mat.texture.size = [width_mm.mm, height_mm.mm]
 
-        pt1 = Geom::Point3d.new(origin.x,             origin.y,             0)
-        pt2 = Geom::Point3d.new(origin.x + width_mm,  origin.y,             0)
-        pt3 = Geom::Point3d.new(origin.x + width_mm,  origin.y + height_mm, 0)
-        pt4 = Geom::Point3d.new(origin.x,             origin.y + height_mm, 0)
+        pt1 = Geom::Point3d.new(origin.x,                  origin.y,                   0)
+        pt2 = Geom::Point3d.new(origin.x + width_mm.mm,    origin.y,                   0)
+        pt3 = Geom::Point3d.new(origin.x + width_mm.mm,    origin.y + height_mm.mm,    0)
+        pt4 = Geom::Point3d.new(origin.x,                  origin.y + height_mm.mm,    0)
 
         grp  = entities.add_group
         face = grp.entities.add_face([pt1, pt2, pt3, pt4])

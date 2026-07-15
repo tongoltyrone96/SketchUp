@@ -74,7 +74,7 @@ module SketchDraw
       end
       if @pts.length >= 2
         view.draw_line(@pts[0], @pts[1])
-        raw   = @pts[0].distance(@pts[1])
+        raw   = @pts[0].distance(@pts[1]).to_mm
         ratio = effective_scale
         real  = raw * ratio
         view.draw_text(@mouse, format_mm(real))
@@ -89,7 +89,7 @@ module SketchDraw
       model.start_operation('Place Dimension', true)
       begin
         ratio      = effective_scale
-        raw_dist   = pt1.distance(pt2)
+        raw_dist   = pt1.distance(pt2).to_mm
         real_dist  = raw_dist * ratio
         label      = format_mm(real_dist)
 

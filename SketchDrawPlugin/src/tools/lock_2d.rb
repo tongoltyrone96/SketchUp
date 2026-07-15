@@ -55,25 +55,24 @@ module SketchDraw
     def self.set_top_view(model, view)
       frame = PaperFrame.find_frame(model)
       if frame && frame.valid?
-        w = frame.get_attribute(SketchDraw::PLUGIN_ID, 'width').to_f
-        h = frame.get_attribute(SketchDraw::PLUGIN_ID, 'height').to_f
-        # Set camera first, then zoom — avoids timing issue with view.zoom
+        w = frame.get_attribute(SketchDraw::PLUGIN_ID, 'width').to_f   # mm
+        h = frame.get_attribute(SketchDraw::PLUGIN_ID, 'height').to_f  # mm
         cam = view.camera
         cam.perspective = false
         cam.set(
-          Geom::Point3d.new(w / 2.0, h / 2.0, 1000),
-          Geom::Point3d.new(w / 2.0, h / 2.0, 0),
+          Geom::Point3d.new(w.mm / 2.0, h.mm / 2.0, 1000.mm),
+          Geom::Point3d.new(w.mm / 2.0, h.mm / 2.0, 0),
           Geom::Vector3d.new(0, 1, 0)
         )
         view.zoom(frame)
       else
-        bb  = model.bounds
-        cx  = bb.valid? ? bb.center.x : 0
-        cy  = bb.valid? ? bb.center.y : 0
+        bb = model.bounds
+        cx = bb.valid? ? bb.center.x : 0
+        cy = bb.valid? ? bb.center.y : 0
         cam = view.camera
         cam.perspective = false
         cam.set(
-          Geom::Point3d.new(cx, cy, 2000),
+          Geom::Point3d.new(cx, cy, 2000.mm),
           Geom::Point3d.new(cx, cy, 0),
           Geom::Vector3d.new(0, 1, 0)
         )
@@ -99,7 +98,7 @@ module SketchDraw
 
         @resetting = true
         eye = cam.eye
-        h   = eye.z > 10 ? eye.z : 2000
+        h   = eye.z > 0.1.mm ? eye.z : 1000.mm
         cam.set(
           Geom::Point3d.new(eye.x, eye.y, h),
           Geom::Point3d.new(eye.x, eye.y, 0),
