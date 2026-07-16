@@ -116,15 +116,24 @@ module SketchDraw
       end
     end
 
-    # Returns the scale ratio to use for this dimension.
-    # Priority: entity's applied_scale attribute (from pt1 click) → State.scale_ratio global
+    # Returns the scale ratio for this dimension.
+    # 1. Check entity at each clicked point for applied_scale
+    # 2. Check active_path (for when editing inside a scaled group)
+    # 3. Return 1 — no correction for non-scaled geometry
     def effective_scale
-      # Use the scale stored on the first snapped entity when available
       if @snap_scales && !@snap_scales.empty?
-        entity_scale = @snap_scales.first
-        return entity_scale if entity_scale && entity_scale > 1
+        found = @snap_scales.compact.find { |s| s && s > 1 }
+        return found if found
       end
-      State.scale_ratio
+      model = Sketchup.active_model
+      if model.respond_to?(:active_path) && model.active_path
+        model.active_path.each do |ent|
+          next unless ent.respond_to?(:get_attribute)
+          val = ent.get_attribute(ATTR_NS, 'applied_scale').to_i
+          return val if val > 1
+        end
+      end
+      1
     end
 
     # Walk up the pick path to find the nearest group with an applied_scale attribute.

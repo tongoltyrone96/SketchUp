@@ -1,8 +1,9 @@
 module SketchDraw
   module State
-    @scale_ratio   = 1
-    @lock_2d       = false
-    @lock_observer = nil
+    @scale_ratio        = 1
+    @lock_2d            = false
+    @lock_observer      = nil
+    @native_dim_observer = nil
 
     class << self
       attr_accessor :scale_ratio, :lock_2d, :lock_observer
@@ -17,10 +18,23 @@ module SketchDraw
         ).to_i
       end
 
+      def install_native_dim_observer(model)
+        return if @native_dim_observer
+        @native_dim_observer = NativeDimObserver.new
+        model.active_entities.add_observer(@native_dim_observer)
+      end
+
+      def remove_native_dim_observer(model)
+        return unless @native_dim_observer
+        model.active_entities.remove_observer(@native_dim_observer) rescue nil
+        @native_dim_observer = nil
+      end
+
       def reset
-        @scale_ratio   = 1
-        @lock_2d       = false
-        @lock_observer = nil
+        @scale_ratio         = 1
+        @lock_2d             = false
+        @lock_observer       = nil
+        @native_dim_observer = nil
       end
     end
   end

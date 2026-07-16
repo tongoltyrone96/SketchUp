@@ -79,37 +79,46 @@ module SketchDraw
 
       remove_existing_frame(entities)
 
-      w = width.mm
-      h = height.mm
+      w  = width.mm
+      h  = height.mm
 
-      pts = [
+      # Center on existing drawing content if present; otherwise use origin
+      ox, oy = content_origin(entities, w, h)
+
+      frame_grp = entities.add_group
+      g_ent     = frame_grp.entities
+
+      # Border edges in local space (0,0)-(w,h); transformation positions in world
+      local_pts = [
         Geom::Point3d.new(0, 0, 0),
         Geom::Point3d.new(w, 0, 0),
         Geom::Point3d.new(w, h, 0),
         Geom::Point3d.new(0, h, 0)
       ]
-      frame_grp = entities.add_group
-      g_ent     = frame_grp.entities
-      face      = g_ent.add_face(pts)
-      edges     = face.edges
+      face  = g_ent.add_face(local_pts)
+      edges = face.edges
       face.erase!
-      edges.each { |e| e.layer = model.layers.at(0) }
+      default_layer = model.layers['Untagged'] || model.layers[0]
+      edges.each { |e| e.layer = default_layer }
 
+      frame_grp.transformation = Geom::Transformation.new(
+        Geom::Point3d.new(ox, oy, 0)
+      )
       frame_grp.set_attribute(ATTR_NS, 'type',   FRAME_TAG)
       frame_grp.set_attribute(ATTR_NS, 'width',  width)
       frame_grp.set_attribute(ATTR_NS, 'height', height)
       frame_grp.name = "PaperFrame_#{width.to_i}x#{height.to_i}"
 
-      draw_title_block(entities, width, height)
+      draw_title_block(entities, width, height, ox, oy)
 
-      fit_view(width, height, frame_grp)
       State.save_to_model(model)
       model.commit_operation
+
+      fit_view(find_frame)
     end
 
     # ── Programmatic title block ───────────────────────────────────────
-    def self.draw_title_block(entities, width, height)
-      # All mm values converted to SketchUp inches with .mm
+    def self.draw_title_block(entities, width, height, ox = 0.0, oy = 0.0)
       lm   = MARGIN_LEFT.mm
       rm   = MARGIN_OTHER.mm
       tm   = MARGIN_OTHER.mm
@@ -118,10 +127,10 @@ module SketchDraw
       w    = width.mm
       h    = height.mm
 
-      left   = lm
-      right  = w - rm
-      top    = h - tm
-      bottom = bm
+      left   = ox + lm
+      right  = ox + w - rm
+      top    = oy + h - tm
+      bottom = oy + bm
       tb_top = bottom + tb_h
       tw     = right - left
 
@@ -199,9 +208,13 @@ module SketchDraw
     end
 
     # ── Helpers ───────────────────────────────────────────────────────
+
+    # Finds the paper frame group — checks attribute first, falls back to
+    # group name so detection survives attribute read failures on SU 2025.
     def self.find_frame(model = Sketchup.active_model)
       model.active_entities.grep(Sketchup::Group).find do |g|
-        g.get_attribute(ATTR_NS, 'type') == FRAME_TAG
+        g.get_attribute(ATTR_NS, 'type') == FRAME_TAG ||
+          g.name.to_s.start_with?('PaperFrame_')
       end
     end
 
@@ -216,7 +229,8 @@ module SketchDraw
       to_erase = []
       entities.grep(Sketchup::Group).each do |g|
         t = g.get_attribute(ATTR_NS, 'type')
-        to_erase << g if t == FRAME_TAG || t == 'title_block'
+        to_erase << g if t == FRAME_TAG || t == 'title_block' ||
+                         g.name.to_s.start_with?('PaperFrame_')
       end
       entities.grep(Sketchup::Text).each do |txt|
         to_erase << txt unless txt.get_attribute(ATTR_NS, 'title_field').nil?
@@ -224,24 +238,39 @@ module SketchDraw
       entities.erase_entities(to_erase) unless to_erase.empty?
     end
 
-    def self.fit_view(width, height, frame_entity = nil)
+    def self.fit_view(frame_entity = nil)
       view   = Sketchup.active_model.active_view
       camera = view.camera
       camera.perspective = false
-      cx = width.mm  / 2.0
-      cy = height.mm / 2.0
-      camera.set(
-        Geom::Point3d.new(cx, cy, 1000.mm),
-        Geom::Point3d.new(cx, cy, 0),
-        Geom::Vector3d.new(0, 1, 0)
-      )
-      if frame_entity && frame_entity.valid?
-        view.zoom(frame_entity)
+      target = (frame_entity && frame_entity.valid?) ? frame_entity : find_frame
+      if target
+        c = target.bounds.center
+        camera.set(
+          Geom::Point3d.new(c.x, c.y, 1000.mm),
+          Geom::Point3d.new(c.x, c.y, 0),
+          Geom::Vector3d.new(0, 1, 0)
+        )
+        view.zoom(target)
       else
-        existing = find_frame
-        existing ? view.zoom(existing) : view.zoom_extents
+        view.zoom_extents
       end
     end
+
+    # Returns the world-space origin (ox, oy) for the paper frame.
+    # - Empty model → (0, 0)
+    # - Any existing content → frame placed to the right with a gap (never overlaps)
+    def self.content_origin(entities, w, h)
+      bb = Geom::BoundingBox.new
+      entities.each do |ent|
+        next if ent.is_a?(Sketchup::Text)
+        bb.add(ent.bounds) if ent.respond_to?(:bounds)
+      end
+      return [0.0, 0.0] unless bb.valid?
+
+      gap = 50.0.mm
+      [bb.max.x + gap, bb.center.y - h / 2.0]
+    end
+    private_class_method :content_origin
 
     def self.ui_path(file)
       File.join(SketchDraw::PLUGIN_DIR, 'src', 'ui', file)

@@ -378,6 +378,7 @@ module SketchDraw
          .gsub('\\', '\\\\')
          .gsub('(', '\\(')
          .gsub(')', '\\)')
+         .b
     end
     private_class_method :pdf_escape
 

@@ -17,6 +17,17 @@ module SketchDraw
     Sketchup.version.to_f >= MIN_VERSION
   end
 
+  class ModelObserver < Sketchup::AppObserver
+    def onNewModel(model)
+      State.load_from_model(model)
+      State.remove_native_dim_observer(model)
+    end
+    def onOpenModel(model)
+      State.load_from_model(model)
+      State.install_native_dim_observer(model) if State.scale_ratio > 1
+    end
+  end
+
   def self.boot
     unless version_ok?
       UI.messagebox(
@@ -27,6 +38,8 @@ module SketchDraw
     end
     Toolbar.build
     EditTool.install_observer
+    Sketchup.add_observer(ModelObserver.new)
+    State.load_from_model
 
     menu = UI.menu('Extensions').add_submenu('SketchDraw')
     menu.add_item('Show Toolbar') { Toolbar.show_toolbar }

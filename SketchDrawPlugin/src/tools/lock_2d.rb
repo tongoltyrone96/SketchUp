@@ -55,13 +55,12 @@ module SketchDraw
     def self.set_top_view(model, view)
       frame = PaperFrame.find_frame(model)
       if frame && frame.valid?
-        w = frame.get_attribute(SketchDraw::PLUGIN_ID, 'width').to_f   # mm
-        h = frame.get_attribute(SketchDraw::PLUGIN_ID, 'height').to_f  # mm
+        c = frame.bounds.center
         cam = view.camera
         cam.perspective = false
         cam.set(
-          Geom::Point3d.new(w.mm / 2.0, h.mm / 2.0, 1000.mm),
-          Geom::Point3d.new(w.mm / 2.0, h.mm / 2.0, 0),
+          Geom::Point3d.new(c.x, c.y, 1000.mm),
+          Geom::Point3d.new(c.x, c.y, 0),
           Geom::Vector3d.new(0, 1, 0)
         )
         view.zoom(frame)
