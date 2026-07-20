@@ -17,7 +17,7 @@ module SketchDraw
         }
         .grid {
           display: grid;
-          grid-template-columns: repeat(5, 1fr);
+          grid-template-columns: repeat(6, 1fr);
           grid-template-rows: repeat(2, 1fr);
           gap: 5px;
           padding: 6px;
@@ -37,6 +37,7 @@ module SketchDraw
         .btn:hover  { filter: brightness(1.18); }
         .btn:active { transform: translateY(1px); border-bottom-width: 1px; filter: brightness(0.88); }
         #btn-paper { background: #2E7D32; }
+        #btn-tmpl  { background: #558B2F; }
         #btn-scale { background: #00695C; }
         #btn-dim   { background: #1565C0; }
         #btn-text  { background: #C62828; }
@@ -52,6 +53,7 @@ module SketchDraw
       <body>
       <div class="grid">
         <button class="btn" id="btn-paper"  onclick="sketchup.cmd_paper()">Paper</button>
+        <button class="btn" id="btn-tmpl"   onclick="sketchup.cmd_tmpl()">Template</button>
         <button class="btn" id="btn-scale"  onclick="sketchup.cmd_scale()">Scale</button>
         <button class="btn" id="btn-dim"    onclick="sketchup.cmd_dim()">Dim</button>
         <button class="btn" id="btn-text"   onclick="sketchup.cmd_text()">Text</button>
@@ -78,9 +80,9 @@ module SketchDraw
         dialog_title: 'SketchDraw',
         scrollable:   false,
         resizable:    false,
-        width:        368,
+        width:        442,
         height:       100,
-        min_width:    368,
+        min_width:    442,
         min_height:   100,
         style:        UI::HtmlDialog::STYLE_UTILITY
       )
@@ -88,6 +90,7 @@ module SketchDraw
       @dialog.set_html(TOOLBAR_HTML)
 
       @dialog.add_action_callback('cmd_paper') { |_| PaperFrame.show_dialog }
+      @dialog.add_action_callback('cmd_tmpl')  { |_| PaperFrame.load_template }
       @dialog.add_action_callback('cmd_scale') { |_| ScaleTool.activate }
       @dialog.add_action_callback('cmd_dim')   { |_| DimensionTool.activate }
       @dialog.add_action_callback('cmd_text')  { |_| TextTool.activate }

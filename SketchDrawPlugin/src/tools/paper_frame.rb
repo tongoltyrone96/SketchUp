@@ -11,20 +11,19 @@ module SketchDraw
     ATTR_NS   = SketchDraw::PLUGIN_ID
     FRAME_TAG = 'paper_frame'.freeze
 
-    # Inner-margin constants (mm)
-    MARGIN_LEFT  = 25.0
+    # Inner-margin constants (mm) — uniform 10 mm on all four sides
+    MARGIN_LEFT  = 10.0
     MARGIN_OTHER = 10.0
     TB_HEIGHT    = 25.0
 
-    TB_COL_SPLITS = [0.28, 0.55, 0.73, 0.83, 0.93].freeze
+    TB_COL_SPLITS = [0.28, 0.55, 0.73, 0.83].freeze
 
     TB_FIELDS = [
       { key: 'project_name',  label: 'PROJECT',   x0: 0.0,  x1: 0.28 },
       { key: 'drawing_title', label: 'TITLE',      x0: 0.28, x1: 0.55 },
       { key: 'drawn_by',      label: 'DRAWN BY',   x0: 0.55, x1: 0.73 },
       { key: 'date',          label: 'DATE',        x0: 0.73, x1: 0.83 },
-      { key: 'revision',      label: 'REVISION',    x0: 0.83, x1: 0.93 },
-      { key: 'scale',         label: 'SCALE',       x0: 0.93, x1: 1.0  }
+      { key: 'revision',      label: 'REVISION',    x0: 0.83, x1: 1.0  }
     ].freeze
 
     # ── Paper size dialog ──────────────────────────────────────────────
@@ -181,9 +180,8 @@ module SketchDraw
       end
     end
 
-    # ── Scale auto-update in title block ──────────────────────────────
+    # ── Scale auto-update in title block (scale field removed) ───────
     def self.update_scale_in_title_block
-      update_title_field('scale', '')
     end
 
     # ── Update a single title field value ─────────────────────────────
@@ -209,13 +207,16 @@ module SketchDraw
 
     # ── Helpers ───────────────────────────────────────────────────────
 
-    # Finds the paper frame group — checks attribute first, falls back to
-    # group name so detection survives attribute read failures on SU 2025.
+    # Finds the paper frame group or component instance — checks attribute first,
+    # falls back to name so detection survives attribute read failures on SU 2025.
+    # Custom SKP templates are ComponentInstance; built-in frames are Group.
     def self.find_frame(model = Sketchup.active_model)
-      model.active_entities.grep(Sketchup::Group).find do |g|
-        g.get_attribute(ATTR_NS, 'type') == FRAME_TAG ||
-          g.name.to_s.start_with?('PaperFrame_')
+      model.active_entities.each do |ent|
+        next unless ent.is_a?(Sketchup::Group) || ent.is_a?(Sketchup::ComponentInstance)
+        return ent if ent.get_attribute(ATTR_NS, 'type') == FRAME_TAG ||
+                      ent.name.to_s.start_with?('PaperFrame_')
       end
+      nil
     end
 
     def self.frame_dimensions(model = Sketchup.active_model)
@@ -227,10 +228,11 @@ module SketchDraw
 
     def self.remove_existing_frame(entities)
       to_erase = []
-      entities.grep(Sketchup::Group).each do |g|
-        t = g.get_attribute(ATTR_NS, 'type')
-        to_erase << g if t == FRAME_TAG || t == 'title_block' ||
-                         g.name.to_s.start_with?('PaperFrame_')
+      entities.each do |ent|
+        next unless ent.is_a?(Sketchup::Group) || ent.is_a?(Sketchup::ComponentInstance)
+        t = ent.get_attribute(ATTR_NS, 'type')
+        to_erase << ent if t == FRAME_TAG || t == 'title_block' ||
+                           ent.name.to_s.start_with?('PaperFrame_')
       end
       entities.grep(Sketchup::Text).each do |txt|
         to_erase << txt unless txt.get_attribute(ATTR_NS, 'title_field').nil?
@@ -275,5 +277,82 @@ module SketchDraw
     def self.ui_path(file)
       File.join(SketchDraw::PLUGIN_DIR, 'src', 'ui', file)
     end
+
+    # ── Load Custom Template (user-supplied SKP) ─────────────────────
+    # Lets the user drop in their own frame + title block from a .skp file.
+    # The imported component is tagged as a paper frame so PDF export uses it
+    # in place of the built-in generated frame.
+    def self.load_template
+      return unless SketchDraw.version_ok?
+
+      path = UI.openpanel('Select Template (SketchUp file)', '', 'SketchUp Model|*.skp||')
+      return unless path
+      unless File.exist?(path)
+        UI.messagebox("File not found:\n#{path}", MB_OK)
+        return
+      end
+
+      model    = Sketchup.active_model
+      entities = model.active_entities
+      model.start_operation('Load Custom Template', true)
+
+      begin
+        remove_existing_frame(entities)
+
+        defn = model.definitions.load(path)
+        bb   = defn.bounds
+        w_in = bb.width
+        h_in = bb.height
+        if w_in < 1.mm || h_in < 1.mm
+          model.abort_operation
+          UI.messagebox('Template appears empty (zero size). Please check the SKP file.', MB_OK)
+          return
+        end
+
+        # Place beside existing content (or at origin)
+        ox, oy = existing_content_origin(entities, w_in, h_in)
+        # Shift so the definition's own min corner sits at (ox, oy)
+        tx = ox - bb.min.x
+        ty = oy - bb.min.y
+        inst = entities.add_instance(
+          defn,
+          Geom::Transformation.new(Geom::Vector3d.new(tx, ty, 0))
+        )
+
+        inst.set_attribute(ATTR_NS, 'type',   FRAME_TAG)
+        inst.set_attribute(ATTR_NS, 'width',  w_in.to_mm)
+        inst.set_attribute(ATTR_NS, 'height', h_in.to_mm)
+        inst.set_attribute(ATTR_NS, 'custom_template', true)
+        base = File.basename(path, '.skp').gsub(/[^A-Za-z0-9_-]/, '_')[0, 40]
+        inst.name = "PaperFrame_#{base}"
+
+        State.save_to_model(model)
+        model.commit_operation
+
+        fit_view(inst)
+        UI.messagebox(
+          "Template loaded:\n#{File.basename(path)}\n\n" \
+          "Size: #{w_in.to_mm.round}mm x #{h_in.to_mm.round}mm\n\n" \
+          "Edit the text fields directly in SketchUp, then run PDF Export.",
+          MB_OK
+        )
+      rescue => e
+        model.abort_operation rescue nil
+        UI.messagebox("Template load failed:\n#{e.class}: #{e.message}", MB_OK)
+      end
+    end
+
+    # Same layout logic as content_origin but exposed for load_template
+    def self.existing_content_origin(entities, w, h)
+      bb = Geom::BoundingBox.new
+      entities.each do |ent|
+        next if ent.is_a?(Sketchup::Text)
+        bb.add(ent.bounds) if ent.respond_to?(:bounds)
+      end
+      return [0.0, 0.0] unless bb.valid?
+      gap = 50.0.mm
+      [bb.max.x + gap, bb.center.y - h / 2.0]
+    end
+    private_class_method :existing_content_origin
   end
 end
