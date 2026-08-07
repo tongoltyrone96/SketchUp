@@ -60,11 +60,12 @@ module SketchDraw
       model = Sketchup.active_model
       return unless SketchDraw.version_ok?
 
-      frame = PaperFrame.find_frame(model)
-      unless frame
+      frame_data = PaperFrame.find_frame_with_xform(model)
+      unless frame_data
         UI.messagebox('No paper frame found. Please insert a paper frame first (Paper button).', MB_OK)
         return
       end
+      frame, ctx_xform = frame_data
 
       pdf_path = UI.savepanel('Export PDF', '', 'PDF Files|*.pdf||')
       return unless pdf_path
@@ -103,15 +104,20 @@ module SketchDraw
       prog.show
 
       UI.start_timer(0.3, false) do
-        perform_export(model, frame, pdf_path, paper_w_mm, paper_h_mm, prog)
+        perform_export(model, frame, ctx_xform, pdf_path, paper_w_mm, paper_h_mm, prog)
       end
     end
 
     # ── Core export ──────────────────────────────────────────────────────
-    def self.perform_export(model, frame, pdf_path, paper_w_mm, paper_h_mm, prog)
-      fb   = frame.bounds
-      @fx0 = fb.min.x
-      @fy0 = fb.min.y
+    # `ctx_xform` is the world-to-parent transform for the frame — needed
+    # when the frame is nested inside a component (e.g. after File → Import),
+    # because frame.bounds is in its parent's local coord system and must
+    # be transformed to world coords to match drawing entities' world coords.
+    def self.perform_export(model, frame, ctx_xform, pdf_path, paper_w_mm, paper_h_mm, prog)
+      fb        = frame.bounds
+      world_min = fb.min.transform(ctx_xform)
+      @fx0 = world_min.x
+      @fy0 = world_min.y
       @wpt = (paper_w_mm * 72.0 / 25.4).round(4)
       @hpt = (paper_h_mm * 72.0 / 25.4).round(4)
       @images       = {}
@@ -146,8 +152,12 @@ module SketchDraw
       face_buf = String.new('', encoding: 'BINARY')
       edge_buf = String.new('', encoding: 'BINARY')
 
-      log "Traversing entities (count=#{model.active_entities.count})..."
-      traverse(model.active_entities, Geom::Transformation.new, face_buf, edge_buf)
+      # Always traverse from the ROOT (model.entities), not active_entities.
+      # active_entities changes when the user has opened a group/component
+      # for editing, and it also misses content nested inside a top-level
+      # imported component. Root traversal handles both cases correctly.
+      log "Traversing entities (count=#{model.entities.count})..."
+      traverse(model.entities, Geom::Transformation.new, face_buf, edge_buf)
 
       log "face_buf: #{face_buf.bytesize} bytes"
       log "edge_buf: #{edge_buf.bytesize} bytes"
@@ -201,7 +211,13 @@ module SketchDraw
           def_ents = ent.definition.entities.to_a
           is_edge_only = !def_ents.empty? && def_ents.all? { |e| e.is_a?(Sketchup::Edge) }
           child_edge_mat = is_edge_only ? (ent.material || parent_edge_mat) : nil
-          traverse(ent.definition.entities, xform * ent.transformation, fbuf, ebuf, child_mat, child_edge_mat)
+          # v5.76: detect "+" centre marks (two very short crossing edges
+          # inside a component) and replace with a small filled dot in PDF.
+          # This is D's specific "+ should show as a dot" request. The
+          # cross-mark scan runs BEFORE the normal traversal so its edges
+          # can be skipped when we recurse.
+          skip_ids = detect_component_cross_marks(ent, xform, fbuf)
+          traverse_filtered(ent.definition.entities, xform * ent.transformation, fbuf, ebuf, child_mat, child_edge_mat, skip_ids)
         when Sketchup::Face
           emit_face(ent, xform, fbuf, parent_mat)
         when Sketchup::Edge
@@ -210,10 +226,109 @@ module SketchDraw
           emit_su_text(ent, xform, ebuf)
         when Sketchup::DimensionLinear
           emit_dimension(ent, xform, ebuf)
+        when Sketchup::Image
+          emit_sketchup_image(ent, xform, fbuf)
         end
       end
     end
     private_class_method :traverse
+
+    # Like traverse but skips edges whose object_id is in skip_ids.
+    # Only used for component internals where we've replaced cross marks
+    # with a filled dot.
+    def self.traverse_filtered(entities, xform, fbuf, ebuf, parent_mat, parent_edge_mat, skip_ids)
+      return traverse(entities, xform, fbuf, ebuf, parent_mat, parent_edge_mat) if skip_ids.nil? || skip_ids.empty?
+      entities.each do |ent|
+        next if ent_hidden?(ent)
+        case ent
+        when Sketchup::Group
+          emit_group(ent, xform, fbuf, ebuf, parent_mat, parent_edge_mat)
+        when Sketchup::ComponentInstance
+          child_mat = ent.material || parent_mat
+          def_ents = ent.definition.entities.to_a
+          is_edge_only = !def_ents.empty? && def_ents.all? { |e| e.is_a?(Sketchup::Edge) }
+          child_edge_mat = is_edge_only ? (ent.material || parent_edge_mat) : nil
+          nested_skip = detect_component_cross_marks(ent, xform, fbuf)
+          traverse_filtered(ent.definition.entities, xform * ent.transformation, fbuf, ebuf, child_mat, child_edge_mat, nested_skip)
+        when Sketchup::Face
+          emit_face(ent, xform, fbuf, parent_mat)
+        when Sketchup::Edge
+          next if skip_ids.include?(ent.object_id)
+          emit_edge(ent, xform, ebuf, parent_edge_mat)
+        when Sketchup::Text
+          emit_su_text(ent, xform, ebuf)
+        when Sketchup::DimensionLinear
+          emit_dimension(ent, xform, ebuf)
+        when Sketchup::Image
+          emit_sketchup_image(ent, xform, fbuf)
+        end
+      end
+    end
+    private_class_method :traverse_filtered
+
+    # v5.81 (= v5.77 stable content): safest cross-mark detection —
+    # isolated edges only (faces.empty?), crossing-pair with strict
+    # midpoint coincidence. In practice this never fires for D's
+    # scaffold drawings (verified via diagnostic logs — the "+" marks
+    # are inside CLAW TOP components where all edges are isolated
+    # AND numerous, so the ≤20 edge bail-out skips them harmlessly).
+    # Kept in place so if a simpler component ever DOES contain a
+    # true isolated 2-edge "+", it still gets replaced with a dot.
+    def self.detect_cross_marks(entities, combined_xform, fbuf)
+      return [] unless entities
+      edges = entities.grep(Sketchup::Edge).select { |e| e.faces.empty? && !e.hidden? }
+      return [] if edges.length < 2 || edges.length > 20
+
+      max_len_pt = 14.2
+      infos = edges.map do |e|
+        p1 = e.start.position.transform(combined_xform)
+        p2 = e.end.position.transform(combined_xform)
+        x1, y1 = su_to_pdf(p1.x, p1.y)
+        x2, y2 = su_to_pdf(p2.x, p2.y)
+        dx = x2 - x1; dy = y2 - y1
+        len = Math.sqrt(dx * dx + dy * dy)
+        { edge: e, x1: x1, y1: y1, x2: x2, y2: y2,
+          mx: (x1 + x2) * 0.5, my: (y1 + y2) * 0.5,
+          dx: dx, dy: dy, len: len }
+      end
+      short = infos.select { |i| i[:len] > 0.1 && i[:len] < max_len_pt }
+      return [] if short.length < 2
+
+      skip = []
+      dots = []
+      short.combination(2).each do |a, b|
+        dp = (a[:dx] * b[:dx] + a[:dy] * b[:dy]).abs / (a[:len] * b[:len])
+        next if dp > 0.3   # not perpendicular enough
+        d_mid = Math.sqrt((a[:mx] - b[:mx])**2 + (a[:my] - b[:my])**2)
+        next if d_mid > [a[:len], b[:len]].min * 0.30
+        skip << a[:edge].object_id
+        skip << b[:edge].object_id
+        dots << [(a[:mx] + b[:mx]) * 0.5, (a[:my] + b[:my]) * 0.5]
+      end
+
+      dots.each do |(cx, cy)|
+        r_pt = 1.0
+        k = 0.5522847498 * r_pt
+        fbuf << "0 0 0 rg " \
+                "#{fn(cx + r_pt)} #{fn(cy)} m " \
+                "#{fn(cx + r_pt)} #{fn(cy + k)} #{fn(cx + k)} #{fn(cy + r_pt)} #{fn(cx)} #{fn(cy + r_pt)} c " \
+                "#{fn(cx - k)} #{fn(cy + r_pt)} #{fn(cx - r_pt)} #{fn(cy + k)} #{fn(cx - r_pt)} #{fn(cy)} c " \
+                "#{fn(cx - r_pt)} #{fn(cy - k)} #{fn(cx - k)} #{fn(cy - r_pt)} #{fn(cx)} #{fn(cy - r_pt)} c " \
+                "#{fn(cx + k)} #{fn(cy - r_pt)} #{fn(cx + r_pt)} #{fn(cy - k)} #{fn(cx + r_pt)} #{fn(cy)} c f\n"
+      end
+      skip
+    rescue => e
+      log "  [cross-mark] error: #{e.class}: #{e.message}"
+      []
+    end
+    private_class_method :detect_cross_marks
+
+    # Backwards-compat wrapper — old name still used by traverse().
+    def self.detect_component_cross_marks(inst, xform, fbuf)
+      return [] unless inst && inst.respond_to?(:definition) && inst.definition
+      detect_cross_marks(inst.definition.entities, xform * inst.transformation, fbuf)
+    end
+    private_class_method :detect_component_cross_marks
 
     def self.ent_hidden?(ent)
       return true if ent.respond_to?(:hidden?) && ent.hidden?
@@ -260,12 +375,41 @@ module SketchDraw
       end
 
       case type
-      when 'image' then emit_image_group(grp, fbuf)
-      when 'text'  then emit_text_group(grp, child_xform, ebuf)
-      else              traverse(grp.entities, child_xform, fbuf, ebuf, grp_mat, child_edge_mat)
+      when 'image'           then emit_image_group(grp, fbuf)
+      when 'text'            then emit_text_group(grp, child_xform, ebuf)
+      when 'hatch_geometry'  then emit_hatch_group(grp, child_xform, ebuf)
+      else
+        # v5.77: also detect "+" cross-marks inside Groups (not just
+        # Components). Base plates built with Groups need the same
+        # treatment as those built with ComponentInstances.
+        skip_ids = detect_cross_marks(grp.entities, child_xform, fbuf)
+        traverse_filtered(grp.entities, child_xform, fbuf, ebuf, grp_mat, child_edge_mat, skip_ids)
       end
     end
     private_class_method :emit_group
+
+    # ── Hatch group (type='hatch_geometry') ─────────────────────────────
+    # Isolated renderer for hatch line groups produced by SketchDraw::Hatch.
+    # Draws each hatch edge as a thin solid black stroke — the drafting
+    # standard for pattern fills — without touching emit_edge or any of
+    # its boosted colour / thicker line-width behaviour. Everything else
+    # in PDF export is unaffected; faces without a hatch attribute don't
+    # go through this code path at all.
+    def self.emit_hatch_group(grp, xform, ebuf)
+      return unless grp && grp.valid?
+      grp.entities.grep(Sketchup::Edge).each do |edge|
+        next if edge.hidden?
+        p1 = edge.start.position.transform(xform)
+        p2 = edge.end.position.transform(xform)
+        x1, y1 = su_to_pdf(p1.x, p1.y)
+        x2, y2 = su_to_pdf(p2.x, p2.y)
+        # 0.35pt is the ISO 128 standard "fine" line weight — matches the
+        # drafting look for hatches, cross-sections and detail fills.
+        ebuf << "0 0 0 RG 0.35 w 0 J [] 0 d " \
+                "#{fn(x1)} #{fn(y1)} m #{fn(x2)} #{fn(y2)} l S\n"
+      end
+    end
+    private_class_method :emit_hatch_group
 
     # ── Concentric ring detection & rendering ─────────────────────────────
     # Build a hashable tuple from a Point3d for use as a graph vertex key.
@@ -422,13 +566,22 @@ module SketchDraw
       path = grp.get_attribute(ATTR_NS, 'orig_path')
       log "  [image] orig_path=#{path.inspect}"
 
-      unless path
-        log "  [image] SKIP: no orig_path attribute"
-        return
-      end
-      unless File.exist?(path)
-        log "  [image] SKIP: file not found at #{path}"
-        return
+      # If the original file path is missing or the file has moved / was
+      # made on a different machine, fall back to the texture embedded
+      # inside the .skp. Every SketchDraw image group has exactly one
+      # textured face; texture_file_for_mat extracts its bitmap to a temp
+      # file so the PDF still renders the image correctly.
+      unless path && File.exist?(path)
+        log "  [image] orig_path unusable — trying embedded texture fallback"
+        face = grp.entities.grep(Sketchup::Face).first
+        mat  = face && (face.material || face.back_material)
+        path = mat ? texture_file_for_mat(mat) : nil
+        if path && File.exist?(path)
+          log "  [image] recovered from embedded texture: #{path}"
+        else
+          log "  [image] SKIP: no usable image source (no orig path, no embedded texture)"
+          return
+        end
       end
 
       b  = grp.bounds
@@ -465,6 +618,74 @@ module SketchDraw
     end
     private_class_method :emit_image_group
 
+    # ── Native Sketchup::Image (from File → Import) ──────────────────────
+    # SketchUp's native File → Import creates a Sketchup::Image entity
+    # (not a Group with a textured face). Handle these so imports like the
+    # iSD logo render in the PDF the same way SketchDraw's own image groups do.
+    def self.emit_sketchup_image(image, xform, fbuf)
+      # Try native file path first (SketchUp 2019+).
+      path = image.respond_to?(:path) ? image.path.to_s : ''
+      log "  [su_image] path=#{path.inspect}"
+
+      # Fallback: extract embedded pixels via image_rep to a temp file.
+      if path.empty? || !File.exist?(path)
+        path = extract_su_image_to_temp(image)
+        if path && File.exist?(path)
+          log "  [su_image] recovered from image_rep: #{path}"
+        else
+          log "  [su_image] SKIP: no usable image source"
+          return
+        end
+      end
+
+      # Bounds in world coords (image.bounds is in the parent's local space).
+      b         = image.bounds
+      world_min = b.min.transform(xform)
+      world_w   = b.width
+      world_h   = b.height
+      pw        = world_w * 72.0
+      ph        = world_h * 72.0
+      log "  [su_image] bounds: #{world_w.round(4)}x#{world_h.round(4)}in => #{pw.round(1)}x#{ph.round(1)}pt"
+
+      if pw < 0.01 || ph < 0.01
+        log "  [su_image] SKIP: zero size"
+        return
+      end
+
+      ext = File.extname(path).downcase
+      raw = File.binread(path) rescue (log "  [su_image] ERROR reading file"; return)
+
+      w, h, filt, payload, alpha_payload = image_payload(raw, ext)
+      unless w && w > 0 && payload
+        log "  [su_image] SKIP: image_payload failed"
+        return
+      end
+
+      px, py = su_to_pdf(world_min.x, world_min.y)
+      name   = "Im#{@img_idx}"
+      @img_idx += 1
+      @images[name] = { w: w, h: h, filter: filt, data: payload, alpha: alpha_payload }
+      log "  [su_image] registered as #{name}  pdf_pos=(#{px.round(1)},#{py.round(1)})  pdf_size=#{pw.round(1)}x#{ph.round(1)}"
+      fbuf << "q #{fn(pw)} 0 0 #{fn(ph)} #{fn(px)} #{fn(py)} cm /#{name} Do Q\n"
+    end
+    private_class_method :emit_sketchup_image
+
+    # Extract a Sketchup::Image's pixel data to a temp PNG file. Used when
+    # the original file path is missing (moved / different machine).
+    def self.extract_su_image_to_temp(image)
+      return nil unless image.respond_to?(:image_rep)
+      rep = image.image_rep rescue nil
+      return nil unless rep && rep.respond_to?(:save_file)
+      tmpdir = ENV['TEMP'] || ENV['TMP'] || (Dir.tmpdir rescue '/tmp')
+      dest   = File.join(tmpdir, "sd_su_img_#{image.object_id}.png")
+      rep.save_file(dest) unless File.exist?(dest)
+      File.exist?(dest) ? dest : nil
+    rescue => e
+      log "  [su_image] extract failed: #{e.message}"
+      nil
+    end
+    private_class_method :extract_su_image_to_temp
+
     # ── Text group (type='text', has text_props) ──────────────────────────
     def self.emit_text_group(grp, xform, ebuf)
       json = grp.get_attribute(ATTR_NS, 'text_props')
@@ -473,9 +694,15 @@ module SketchDraw
       content = props['content'].to_s
       return if content.empty?
       content = content.upcase if props['is_caps']
-      fp = map_font(props['font'])
+      bold   = props['bold']   == true || props['bold']   == 'true'
+      italic = props['italic'] == true || props['italic'] == 'true'
+      fp = map_font(props['font'], bold, italic)
       sz = [props['size_pt'].to_f, 1.0].max
-      r, g, b = hex_rgb(props['color'] || '#000000')
+      # Apply the same saturation/value boost as edges & faces — otherwise
+      # text picked from a slightly-muted swatch (e.g. #C81E1E) prints faded
+      # while adjacent boosted geometry looks punchy, causing an obvious
+      # colour mismatch in the exported PDF.
+      r, g, b = boost_saturation(*hex_rgb(props['color'] || '#000000'))
       register_font(fp)
       fk = @used_fonts[fp]
 
@@ -493,11 +720,36 @@ module SketchDraw
       non_empty = content.split("\n").map(&:strip).reject(&:empty?)
       non_empty.each_with_index do |line, i|
         lg = line_grps[i] || line_grps.last
-        t  = (xform * lg.transformation).origin
+        combined = xform * lg.transformation
+        t  = combined.origin
         ox, oy = su_to_pdf(t.x, t.y)
-        log "  [text] line#{i}: #{line[0,30].inspect} pos=(#{ox.round(1)},#{oy.round(1)})"
-        ebuf << "BT /#{fk} #{fn(sz)} Tf #{fn(r)} #{fn(g)} #{fn(b)} rg " \
-                "#{fn(ox)} #{fn(oy)} Td (#{pdf_escape(line)}) Tj ET\n"
+        # v5.76: preserve text rotation. Previously we always emitted
+        # `Td ox oy (text) Tj` which places text horizontally regardless
+        # of the group's transformation, so a Text placed vertically in
+        # SU ("Side Elevation" rotated 90°) came out horizontal in PDF.
+        # PDF text-matrix `a b c d e f Tm` sets both rotation and origin
+        # in one command. Rotation angle comes from the group's xaxis
+        # direction after the combined transformation.
+        # v5.77: fixed sign — `su_to_pdf` preserves Y axis direction
+        # (both SU and PDF have Y-up), so no compensation needed. The
+        # earlier `-xa.y` flipped text back-to-front ("noitavelE ediS"
+        # instead of "Side Elevation" reading up the page).
+        xa = combined.xaxis
+        ang = Math.atan2(xa.y, xa.x)
+        # Nearly-horizontal text — use the cheaper Td form for readability
+        # of the emitted PDF (and to avoid float noise from cos/sin ≈ 1).
+        if ang.abs < 0.001
+          log "  [text] line#{i}: #{line[0,30].inspect} pos=(#{ox.round(1)},#{oy.round(1)}) horiz"
+          ebuf << "BT /#{fk} #{fn(sz)} Tf #{fn(r)} #{fn(g)} #{fn(b)} rg " \
+                  "#{fn(ox)} #{fn(oy)} Td (#{pdf_escape(line)}) Tj ET\n"
+        else
+          ca = Math.cos(ang)
+          sa = Math.sin(ang)
+          log "  [text] line#{i}: #{line[0,30].inspect} pos=(#{ox.round(1)},#{oy.round(1)}) rot=#{(ang * 180.0 / Math::PI).round(1)}°"
+          ebuf << "BT /#{fk} #{fn(sz)} Tf #{fn(r)} #{fn(g)} #{fn(b)} rg " \
+                  "#{fn(ca)} #{fn(sa)} #{fn(-sa)} #{fn(ca)} #{fn(ox)} #{fn(oy)} Tm " \
+                  "(#{pdf_escape(line)}) Tj ET\n"
+        end
       end
     end
     private_class_method :emit_text_group
@@ -619,8 +871,12 @@ module SketchDraw
 
       # Respect the actual alpha value set on the SketchUp material.
       # (If mat.alpha = 1.0, get_or_create_gs returns nil so no ExtGState is emitted.)
+      # SketchUp materials often carry an alpha < 1.0 that just tunes the
+      # viewport tint, not real translucency the user wants in print. Only
+      # honour meaningful transparency (alpha < 0.9) — anything closer to
+      # opaque is clamped so PDF colours don't come out faded.
       raw_alpha = mat.respond_to?(:alpha) ? mat.alpha.to_f : 1.0
-      raw_alpha = 1.0 if raw_alpha <= 0.0 || raw_alpha > 1.0
+      raw_alpha = 1.0 if raw_alpha <= 0.0 || raw_alpha >= 0.9
       gs_name   = get_or_create_gs(raw_alpha)
 
       # Image dedup: embed each unique texture file only once
@@ -781,8 +1037,28 @@ module SketchDraw
 
       dash     = edge_dash_array(edge)
       has_dots = dash && dash.any? { |v| v == 0 }
-      lw       = has_dots ? 0.8 : 0.5   # thin (0.5pt≈0.18mm ISO thin; dot patterns get 0.8pt so dots stay visible)
       cap      = has_dots ? 1   : 0     # 1 = round cap (circular dots), 0 = butt cap (square dash ends)
+
+      # Line width: if the edge has a custom mm value from Feature C (Line Thickness),
+      # use that (converted mm -> pt). Otherwise fall back to the defaults.
+      # v5.94: dotted / chain-dot lines dropped to 0.7pt while solid
+      # stays at 0.9pt. User request — the dot / dash strokes were
+      # still reading a touch heavy relative to the solid ledgers.
+      # Both are still in the ISO thin-drafting range.
+      #   Default solid  0.9pt (~0.32mm)
+      #   Default dashed 0.7pt (~0.25mm) — thinner, matches visual
+      #                                    weight seen in SketchUp
+      #   Extra Thin (0.20mm) = 0.57pt → thinner than default
+      #   Thin       (0.35mm) = 1.00pt → just above default
+      #   Medium     (0.60mm) = 1.70pt → clearly heavier than default
+      #   Thick      (0.90mm) = 2.55pt
+      #   Extra Thick(1.20mm) = 3.40pt
+      custom_mm = edge.get_attribute(ATTR_NS, 'line_width_mm').to_f rescue 0.0
+      lw = if custom_mm > 0.0
+             (custom_mm * 72.0 / 25.4).round(4)
+           else
+             has_dots ? 0.7 : 0.9
+           end
 
       # Compute a dash phase so the pattern is symmetric across the line.
       # Centering the first dash element on the line midpoint yields left/right symmetry.
@@ -809,20 +1085,46 @@ module SketchDraw
     def self.edge_rgb(edge, parent_edge_mat = nil)
       if edge.material && edge.material.respond_to?(:color) && edge.material.color
         c = edge.material.color
-        return [c.red / 255.0, c.green / 255.0, c.blue / 255.0]
+        return boost_saturation(c.red / 255.0, c.green / 255.0, c.blue / 255.0)
       end
       if parent_edge_mat && parent_edge_mat.respond_to?(:color) && parent_edge_mat.color
         unless parent_edge_mat.respond_to?(:texture) && parent_edge_mat.texture
           c = parent_edge_mat.color
-          return [c.red / 255.0, c.green / 255.0, c.blue / 255.0]
+          return boost_saturation(c.red / 255.0, c.green / 255.0, c.blue / 255.0)
         end
       end
       if edge.layer
         lname = edge.layer.name.to_s
-        unless lname == 'Untagged' || lname == 'Layer0' || lname.empty?
-          if edge.layer.respond_to?(:color) && edge.layer.color
+        # Skip plugin-created tag layers (SKD_Style_… / SKD_LW_…). Those
+        # tags exist only to carry a native SU line_style or as internal
+        # bookkeeping; SketchUp assigns them a random auto-colour that
+        # would otherwise bleed into the PDF as an unexpected stroke
+        # colour (the "bracing edges came out orange" bug). Mirrors the
+        # ThicknessOverlay.edge_color filter — keeps viewport and PDF
+        # in sync so a Style-tagged edge falls back to material / black
+        # rather than picking up the tag's random hue.
+        is_plugin_tag = lname.start_with?('SKD_Style_') || lname.start_with?('SKD_LW_')
+        unless is_plugin_tag || lname == 'Untagged' || lname == 'Layer0' || lname.empty?
+          # v5.76: only use layer colour when SketchUp's own viewport is
+          # ALSO showing edges by layer colour (rendering_options
+          # 'DisplayColorByLayer' is true). Otherwise the PDF picks up
+          # a layer hue that SU is hiding — e.g. a "Bracing" tag with an
+          # auto-generated yellow, where the viewport draws the edge
+          # black but the PDF suddenly showed it yellow. Now viewport
+          # and PDF pull from the same rule: material colour first,
+          # layer colour only if SU is rendering that way, otherwise
+          # black. Wraps in rescue so older SU versions without the
+          # option key still fall through to the old behaviour.
+          use_layer_color = false
+          begin
+            ropt = Sketchup.active_model && Sketchup.active_model.rendering_options
+            use_layer_color = ropt && ropt['DisplayColorByLayer'] == true
+          rescue
+            use_layer_color = false
+          end
+          if use_layer_color && edge.layer.respond_to?(:color) && edge.layer.color
             c = edge.layer.color
-            return [c.red / 255.0, c.green / 255.0, c.blue / 255.0]
+            return boost_saturation(c.red / 255.0, c.green / 255.0, c.blue / 255.0)
           end
         end
       end
@@ -832,12 +1134,66 @@ module SketchDraw
     end
     private_class_method :edge_rgb
 
+    # Force every chromatic pixel to maximum saturation + strong brightness
+    # so the PDF matches SketchUp's viewport look. Pastel/faded materials
+    # (which look OK in SketchUp thanks to viewport lighting) print washed
+    # out otherwise. Only pure white / black / grey are left untouched so
+    # the paper background and dimension leaders stay clean.
+    #
+    # value_lift — fraction of the "gap to 1.0" to close. A multiplicative
+    #              boost (e.g. max * 1.30) hardly moves dark colours (0.5 →
+    #              0.65 stays dim); an additive blend toward 1.0 lifts dark
+    #              reds/greens/blues to fully vivid while leaving already-
+    #              bright colours untouched.
+    #              0.95 → dark red 0.588 becomes 0.979 ≈ pure vivid red;
+    #              medium 0.784 becomes 0.989; bright 1.0 stays 1.0.
+    #              Combined with `new_s = 1.0` (full saturation) every
+    #              chromatic pixel prints at near-max vividness.
+    def self.boost_saturation(r, g, b, value_lift = 0.95)
+      max = [r, g, b].max
+      min = [r, g, b].min
+      # `max - min < 0.03` protects near-neutral greys (e.g. #808285) from
+      # being colour-tinted — anything with <3% chroma stays grey.
+      return [r, g, b] if max <= 0.001 || max - min < 0.03  # black or grey
+
+      # Force full saturation: scale each channel's gap-from-max so the
+      # dimmest channel goes to zero. Preserves hue exactly.
+      s     = (max - min) / max
+      scale = 1.0 / s
+      br    = max - (max - r) * scale
+      bg    = max - (max - g) * scale
+      bb    = max - (max - b) * scale
+
+      # Value: blend the dominant channel toward 1.0 (additive lift, not
+      # multiplicative). Same relative gain for every darkness level, so
+      # dark colours become vivid instead of merely "slightly less dark".
+      new_max = max + (1.0 - max) * value_lift
+      vf      = new_max / max
+      [(br * vf).clamp(0.0, 1.0),
+       (bg * vf).clamp(0.0, 1.0),
+       (bb * vf).clamp(0.0, 1.0)]
+    end
+    private_class_method :boost_saturation
+
     # Returns PDF dash array for the edge's line style, or nil for solid.
     def self.edge_dash_array(edge)
       style_name = nil
-      if edge.respond_to?(:line_style) && (ls = edge.line_style)
-        style_name = ls.respond_to?(:name) ? ls.name : ls.to_s
+      # 1. The SketchDraw "Line Style" tool stores an explicit attribute —
+      #    check this first so PDF renders correctly even if the tag layer
+      #    was later deleted or the edge was moved off its style tag.
+      begin
+        v = edge.get_attribute(ATTR_NS, 'line_style_name')
+        style_name = v.to_s if v && !v.to_s.empty?
+      rescue
+        style_name = nil
       end
+      # 2. Fall back to the edge's own line_style property (present on some
+      #    SketchUp versions as a read-through of the layer's style).
+      if style_name.nil? && edge.respond_to?(:line_style)
+        ls = edge.line_style rescue nil
+        style_name = ls.respond_to?(:name) ? ls.name : ls.to_s if ls
+      end
+      # 3. Fall back to the layer's line style by name.
       style_name ||= layer_line_style_name(edge.layer)
       return nil unless style_name && !style_name.empty?
 
@@ -922,8 +1278,33 @@ module SketchDraw
     end
     private_class_method :fn
 
-    def self.map_font(name)
-      PDF_FONT_MAP[name.to_s] || 'Helvetica'
+    # Map (family, bold, italic) → one of the PDF Standard-14 font names.
+    # Each family has 4 variants (regular / bold / italic / bold-italic) that
+    # any PDF viewer renders natively, so no font embedding is required.
+    def self.map_font(name, bold = false, italic = false)
+      family = PDF_FONT_MAP[name.to_s] || 'Helvetica'
+      case family
+      when 'Helvetica'
+        if bold && italic then 'Helvetica-BoldOblique'
+        elsif bold        then 'Helvetica-Bold'
+        elsif italic      then 'Helvetica-Oblique'
+        else                   'Helvetica'
+        end
+      when 'Times-Roman'
+        if bold && italic then 'Times-BoldItalic'
+        elsif bold        then 'Times-Bold'
+        elsif italic      then 'Times-Italic'
+        else                   'Times-Roman'
+        end
+      when 'Courier'
+        if bold && italic then 'Courier-BoldOblique'
+        elsif bold        then 'Courier-Bold'
+        elsif italic      then 'Courier-Oblique'
+        else                   'Courier'
+        end
+      else
+        family
+      end
     end
     private_class_method :map_font
 
@@ -942,7 +1323,7 @@ module SketchDraw
     def self.mat_rgb(mat, default)
       if mat && mat.respond_to?(:color) && mat.color
         c = mat.color
-        [c.red / 255.0, c.green / 255.0, c.blue / 255.0]
+        boost_saturation(c.red / 255.0, c.green / 255.0, c.blue / 255.0)
       else
         [default, default, default]
       end
@@ -1010,11 +1391,25 @@ module SketchDraw
       pat_res  = pat_ids.map    { |n,  id| "/#{n} #{id} 0 R" }.join(' ')
       gs_res   = gs_ids.map     { |n,  id| "/#{n} #{id} 0 R" }.join(' ')
 
+      # /DefaultRGB forces every DeviceRGB colour operator (rg / RG) to be
+      # interpreted through this calibrated sRGB space. Without it, Adobe
+      # Acrobat runs raw DeviceRGB through its own colour-management
+      # pipeline, muting saturation — while Chrome's built-in PDF viewer
+      # renders raw RGB directly. Declaring CalRGB here makes both viewers
+      # produce the same look. The dictionary encodes standard sRGB:
+      #   D65 white point, gamma 2.2, sRGB → XYZ colour matrix.
+      # Tiny addition (~200 bytes), no ICC profile blob required.
+      srgb_cs = '/DefaultRGB [/CalRGB << ' \
+                '/WhitePoint [0.9505 1.0 1.0891] ' \
+                '/Gamma [2.2 2.2 2.2] ' \
+                '/Matrix [0.4124 0.2126 0.0193 0.3576 0.7152 0.1192 0.1805 0.0722 0.9505] ' \
+                '>>]'
       res = String.new('', encoding: 'BINARY')
       res << "/Font << #{font_res} >> "     unless font_res.empty?
       res << "/XObject << #{xobj_res} >> "  unless xobj_res.empty?
       res << "/Pattern << #{pat_res} >> "   unless pat_res.empty?
-      res << "/ExtGState << #{gs_res} >>"   unless gs_res.empty?
+      res << "/ExtGState << #{gs_res} >> "  unless gs_res.empty?
+      res << "/ColorSpace << #{srgb_cs} >>"
       log "build_pdf: Resources=#{res.inspect[0, 120]}"
 
       buf = String.new("%PDF-1.4\n%\xE2\xE3\xCF\xD3\n", encoding: 'BINARY')

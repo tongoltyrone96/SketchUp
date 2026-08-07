@@ -63,10 +63,19 @@ module SketchDraw
       model = Sketchup.active_model
       model.start_operation('Edit Text', true)
       begin
-        origin = group.bounds.min
+        # Reuse the ORIGINAL placement point stored at creation time.
+        # Using `group.bounds.min` here (the previous behaviour) shifted the
+        # text every time it was edited: bounds depend on line count and
+        # alignment, so re-using them as the new origin caused the text to
+        # slide down/left on every re-edit.
+        origin = read_text_origin(group)
         group.entities.clear!
         build_text_content(group.entities, origin, props)
         group.set_attribute(ATTR_NS, 'text_props', props.to_json)
+        # Keep the stored origin in sync (a no-op for groups already created
+        # with an origin attribute; heals legacy groups that don't have one).
+        group.set_attribute(ATTR_NS, 'origin',
+                            [origin.x.to_f, origin.y.to_f, origin.z.to_f])
         model.commit_operation
       rescue => e
         model.abort_operation rescue nil
@@ -79,8 +88,25 @@ module SketchDraw
       build_text_content(group.entities, origin, props)
       group.set_attribute(ATTR_NS, 'type',       'text')
       group.set_attribute(ATTR_NS, 'text_props', props.to_json)
+      # Persist the placement point so future edits can reuse it exactly.
+      group.set_attribute(ATTR_NS, 'origin',
+                          [origin.x.to_f, origin.y.to_f, origin.z.to_f])
       group.name = 'SketchDraw_Text'
       group
+    end
+
+    # Retrieve the point the text was placed at. Falls back to a bounds-based
+    # estimate for old groups saved before the 'origin' attribute existed —
+    # `bounds.max.y` is closer to the first-line baseline than `bounds.min.y`
+    # (which caused the drift bug), and this fallback runs at most once per
+    # legacy group because `update_text_group` writes the attribute back.
+    def self.read_text_origin(group)
+      raw = group.get_attribute(ATTR_NS, 'origin')
+      if raw.is_a?(Array) && raw.length >= 3
+        return Geom::Point3d.new(raw[0].to_f, raw[1].to_f, raw[2].to_f)
+      end
+      b = group.bounds
+      Geom::Point3d.new(b.min.x, b.max.y, b.min.z)
     end
 
     def self.build_text_content(g_entities, origin, props)
@@ -88,8 +114,14 @@ module SketchDraw
       font    = props[:font]   || 'Arial'
       bold    = props[:bold]   == true || props[:bold]   == 'true'
       italic  = props[:italic] == true || props[:italic] == 'true'
-      height  = (props[:size_pt].to_f * 0.3528).mm  # pt → mm → SketchUp inches
-      height  = 3.5.mm if height <= 0
+      # Base height at paper scale: 10pt ≈ 3.5mm on paper.
+      base_h  = (props[:size_pt].to_f * 0.3528).mm
+      base_h  = 3.5.mm if base_h <= 0
+      # Scale up when placed outside a paper frame so the text is visible
+      # at world scale (3.5mm on a 17-metre scaffold is sub-pixel and
+      # invisible — the "text 안 보인다" bug on the scaffold view). Inside
+      # a paper frame the multiplier is 1.0 so paper output is unchanged.
+      height  = base_h * SketchDraw::State.paper_scale_multiplier_at(model, origin)
 
       hex     = (props[:color] || '#000000').gsub('#', '')
       r, g, b = hex.scan(/../).map { |h| h.to_i(16) }
@@ -131,14 +163,12 @@ module SketchDraw
         )
 
         all_faces = line_grp.entities.grep(Sketchup::Face)
-        puts "SketchDraw '#{line_text}': #{all_faces.length} faces, areas=[#{all_faces.map { |f| f.area.round(3) }.join(',')}]"
 
         # add_3d_text filled=true can create a large background rectangle face.
         # Identify it as the face with area >> all other faces, then remove it.
         if all_faces.length > 1
           sorted = all_faces.sort_by(&:area)
           if sorted.last.area > sorted[-2].area * 3.0
-            puts "SketchDraw: removing background face (area=#{sorted.last.area.round(3)})"
             line_grp.entities.erase_entities([sorted.last])
           end
         end

@@ -34,7 +34,6 @@ module SketchDraw
       end
 
       def onActivePathChanged(model)
-        puts "SketchDraw: onActivePathChanged fired. active_path=#{model.active_path.inspect}"
         return if @handling
 
         path = model.active_path
@@ -44,7 +43,6 @@ module SketchDraw
         return unless entity.respond_to?(:get_attribute)
 
         type = entity.get_attribute(SketchDraw::PLUGIN_ID, 'type')
-        puts "SketchDraw: double-clicked entity type=#{type.inspect}"
         return unless %w[text arrow].include?(type)
 
         @handling = true
@@ -54,7 +52,6 @@ module SketchDraw
             sel = model.selection
             sel.clear
             sel.add(entity)
-            puts "SketchDraw: opening edit dialog for #{type}"
             EditTool.edit_selected
           ensure
             @handling = false

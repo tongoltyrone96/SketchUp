@@ -207,17 +207,45 @@ module SketchDraw
 
     # ── Helpers ───────────────────────────────────────────────────────
 
-    # Finds the paper frame group or component instance — checks attribute first,
-    # falls back to name so detection survives attribute read failures on SU 2025.
-    # Custom SKP templates are ComponentInstance; built-in frames are Group.
+    # Finds the paper frame group or component instance — checks attribute
+    # first, falls back to name so detection survives attribute read failures
+    # on SU 2025. Custom SKP templates are ComponentInstance; built-in frames
+    # are Group.
+    #
+    # Searches the entire model recursively, not just top-level entities.
+    # Necessary because operations like File → Import wrap the whole drawing
+    # inside a component, exploding + re-grouping nests it, and saving-then-
+    # inserting into a new file makes the paper frame a child of the
+    # inserted component. Without recursion, PDF export would fail on any of
+    # those scenarios with "No paper frame found".
     def self.find_frame(model = Sketchup.active_model)
-      model.active_entities.each do |ent|
+      r = find_frame_with_xform(model)
+      r ? r[0] : nil
+    end
+
+    # Same recursive search as find_frame, but also returns the transformation
+    # from world coords to the frame's PARENT context. PDF export needs this
+    # to convert the frame's local-space bounds to a world-space origin so
+    # the drawing content (which is in world coords) lands on the PDF page.
+    def self.find_frame_with_xform(model = Sketchup.active_model)
+      _find_frame_in(model.entities, Geom::Transformation.new)
+    end
+
+    def self._find_frame_in(entities, ctx_xform)
+      entities.each do |ent|
         next unless ent.is_a?(Sketchup::Group) || ent.is_a?(Sketchup::ComponentInstance)
-        return ent if ent.get_attribute(ATTR_NS, 'type') == FRAME_TAG ||
-                      ent.name.to_s.start_with?('PaperFrame_')
+        if ent.get_attribute(ATTR_NS, 'type') == FRAME_TAG ||
+           ent.name.to_s.start_with?('PaperFrame_')
+          return [ent, ctx_xform]
+        end
+        inner     = ent.is_a?(Sketchup::Group) ? ent.entities : ent.definition.entities
+        child_ctx = ctx_xform * ent.transformation
+        found     = _find_frame_in(inner, child_ctx)
+        return found if found
       end
       nil
     end
+    private_class_method :_find_frame_in
 
     def self.frame_dimensions(model = Sketchup.active_model)
       f = find_frame(model)

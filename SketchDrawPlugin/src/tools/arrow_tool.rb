@@ -131,7 +131,11 @@ module SketchDraw
       arrow_mat  = model.materials["SKD_#{hex_a}"] || model.materials.add("SKD_#{hex_a}")
       arrow_mat.color = Sketchup::Color.new(ra, ga, ba)
 
-      arrow_size = (data[:arrow_size] || 3.0).to_f.mm
+      # Scale up the arrow head + leader thickness when placed outside a
+      # paper frame so the annotation is visible on world-scale models.
+      # Inside a paper frame the multiplier is 1.0 (paper-mm as-is).
+      paper_mult = SketchDraw::State.paper_scale_multiplier_at(model, tip)
+      arrow_size = (data[:arrow_size] || 3.0).to_f.mm * paper_mult
       line_width = arrow_size * 0.15                  # thickness proportional to arrow size
 
       dir = tip.vector_to(line_end)
@@ -172,14 +176,16 @@ module SketchDraw
       unless label.empty?
         font      = data[:font] || 'Arial'
         text_size = (data[:text_size] || 10.0).to_f
-        text_h    = (text_size * 0.3528).mm
+        # text_h shares the same paper→world multiplier so the label stays
+        # in the same visual proportion to the arrow head at any scale.
+        text_h    = (text_size * 0.3528).mm * paper_mult
         mid       = Geom::Point3d.new(
           (tip.x + line_end.x) / 2.0,
           (tip.y + line_end.y) / 2.0,
           0
         )
         label_perp   = (perp.y < -0.001) ? perp.reverse : perp
-        label_origin = mid.offset(label_perp, text_h * 0.6 + line_width + 1.0.mm)
+        label_origin = mid.offset(label_perp, text_h * 0.6 + line_width + (1.0.mm * paper_mult))
         TextTool.build_text_group(g_entities, label_origin, {
           content:    label,
           font:       font,

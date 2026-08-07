@@ -3,7 +3,7 @@ require 'extensions.rb'
 
 module SketchDraw
   PLUGIN_ID   = 'SketchDrawPlugin'.freeze
-  PLUGIN_VER  = '1.0.0'.freeze
+  PLUGIN_VER  = '5.94'.freeze
   MIN_VERSION = 19
 
   # Works both in dev (loader inside plugin folder) and installed via .rbz (loader at Plugins root)
